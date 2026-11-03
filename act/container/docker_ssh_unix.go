@@ -1,7 +1,7 @@
 // Copyright 2026 The Gitea Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//go:build !WITHOUT_DOCKER && (darwin || netbsd)
+//go:build !WITHOUT_DOCKER && (darwin || netbsd || freebsd)
 
 package container
 

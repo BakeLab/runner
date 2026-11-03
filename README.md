@@ -1,28 +1,28 @@
 # Gitea Runner
 
-## Installation
+Gitea Runner runs the jobs of Gitea Actions workflows. Register it with a Gitea instance to run jobs in Docker containers, Kubernetes pods or directly on the host.
 
-The runner runs on Linux, macOS and Windows.
+## Installation
 
 ### Prerequisites
 
-On the runner:
+- Linux, macOS or Windows, or FreeBSD.
+- `git` 2.34.1 or newer.
+- `docker`, or `podman` with `podman.socket` enabled, for `docker` labels and Docker actions. See Docker's [install instructions](https://docs.docker.com/engine/install/).
 
-- `git` 2.34.1 or newer on `PATH`, to clone reusable workflows, and actions whose host serves no archive of them.
-- `docker` or `podman` with `podman.socket` enabled, for docker mode, Docker actions and `docker://` steps. To install Docker CE, follow the official [install instructions](https://docs.docker.com/engine/install/).
+In the job image, or on the host for host jobs:
 
-Where steps run, in the job image or on the runner in host mode:
-
-- `bash` or `sh` for `run` steps, `pwsh` or `powershell` on a Windows host.
+- `bash` or `sh`, or `pwsh` or `powershell` on Windows.
 - `node` for JavaScript actions and `hashFiles()`.
 - `git` 2.34.1 or newer for [`builtin:checkout`](docs/builtin-actions.md).
-- `git-lfs` and `ssh` for `builtin:checkout`, only when its `lfs` or `ssh-key` input is used.
+- `git-lfs` for `builtin:checkout` with `lfs: true`.
+- `ssh` for `builtin:checkout` with `ssh-key`.
 
 Kubernetes mode needs [a few more tools](docs/kubernetes.md) in job images.
 
 ### Download pre-built binary
 
-Visit [here](https://dl.gitea.com/gitea-runner/) and download the right version for your platform.
+Download the binary for your platform from [dl.gitea.com](https://dl.gitea.com/gitea-runner/).
 
 ### Build from source
 
@@ -38,7 +38,7 @@ make docker
 
 ## Quickstart
 
-Actions are disabled by default, so you need to add the following to the configuration file of your Gitea instance to enable it:
+Enable Actions in the configuration file of your Gitea instance:
 
 ```ini
 [actions]
@@ -51,39 +51,18 @@ ENABLED=true
 ./gitea-runner register
 ```
 
-And you will be asked to input:
+It asks for:
 
-1. Gitea instance URL, like `http://192.168.8.8:3000/`. You should use your gitea instance ROOT_URL as the instance argument
- and you should not use `localhost` or `127.0.0.1` as instance IP;
-2. Runner token, you can get it from `http://192.168.8.8:3000/admin/actions/runners`;
-3. Runner name, you can just leave it blank;
-4. Runner labels, you can just leave it blank.
+1. The Gitea instance URL. Use its `ROOT_URL`, not `localhost` or `127.0.0.1`.
+2. A runner token, from `/admin/actions/runners` on your instance.
+3. A runner name, the hostname when left blank.
+4. The runner [labels](#labels), the defaults when left blank.
 
-The process looks like:
-
-```text
-INFO Registering runner, arch=amd64, os=darwin, version=0.1.5.
-WARN Runner in user-mode.
-INFO Enter the Gitea instance URL (for example, https://gitea.com/):
-http://192.168.8.8:3000/
-INFO Enter the runner token:
-fe884e8027dc292970d4e0303fe82b14xxxxxxxx
-INFO Enter the runner name (if set empty, use hostname: Test.local):
-
-INFO Enter the runner labels, leave blank to use the default labels (comma-separated, for example, ubuntu-latest:docker://docker.gitea.com/runner-images:ubuntu-latest):
-
-INFO Registering runner, name=Test.local, instance=http://192.168.8.8:3000/, labels=[ubuntu-latest:docker://docker.gitea.com/runner-images:ubuntu-latest ubuntu-22.04:docker://docker.gitea.com/runner-images:ubuntu-22.04 ubuntu-20.04:docker://docker.gitea.com/runner-images:ubuntu-20.04].
-DEBU Successfully pinged the Gitea instance server
-INFO Runner registered successfully.
-```
-
-You can also register with command line arguments.
+To register without prompts:
 
 ```bash
-./gitea-runner register --instance http://192.168.8.8:3000 --token <my_runner_token> --no-interactive
+./gitea-runner register --instance https://gitea.example.com --token <token> --no-interactive
 ```
-
-If the registry succeed, it will run immediately. Next time, you could run the runner directly.
 
 ### Run
 
@@ -91,18 +70,20 @@ If the registry succeed, it will run immediately. Next time, you could run the r
 ./gitea-runner daemon
 ```
 
+## Deployment
+
 ### Windows service
 
-Register the runner first, keeping `gitea-runner.exe`, `config.yaml` and the `.runner` registration file in the same directory. From an elevated Command Prompt, install and start the service with absolute paths:
+Register the runner first, keeping `gitea-runner.exe`, `config.yaml` and the `.runner` file in one directory. Then install and start the service from an elevated Command Prompt:
 
 ```bat
 sc.exe create gitea-runner binPath= "\"C:\gitea-runner\gitea-runner.exe\" daemon --config \"C:\gitea-runner\config.yaml\"" start= auto
 sc.exe start gitea-runner
 ```
 
-The service runs from the executable's directory and appends its logs to `gitea-runner.log` there. Its account needs write access to that directory and access to the tools used by jobs. Use `sc.exe stop gitea-runner` to stop it, allowing running jobs to finish according to `runner.shutdown_timeout`.
+The service logs to `gitea-runner.log` next to the executable. Its account needs write access to that directory and access to the tools jobs use.
 
-On shutdown or reboot, Windows waits for the service's preshutdown timeout at most, so set it above `runner.shutdown_timeout`, here six minutes for `5m`. It takes effect after the next reboot:
+`sc.exe stop gitea-runner` lets running jobs finish within `runner.shutdown_timeout`. To allow the same on shutdown, raise the service's preshutdown timeout above it, here to six minutes. This takes effect after the next reboot:
 
 ```bat
 reg.exe add HKLM\SYSTEM\CurrentControlSet\Services\gitea-runner /v PreshutdownTimeout /t REG_DWORD /d 360000 /f
@@ -117,21 +98,25 @@ docker run --privileged -e GITEA_INSTANCE_URL=https://your_gitea.com -e GITEA_RU
   -v "$PWD/data:/data" -v runner-docker:/var/lib/docker --name my_runner gitea/runner:nightly-dind
 ```
 
-The volumes keep the runner's registration and the job image cache across container recreation.
+The volumes keep the registration and the image cache across container recreation. The image reads more variables, such as `GITEA_RUNNER_LABELS` and `CONFIG_FILE`, see [scripts/run.sh](scripts/run.sh) and the [Docker example](examples/docker/README.md).
 
-### Image flavours
+#### Image flavours
 
 | Tag | Docker daemon for jobs |
 | --- | --- |
 | `latest-dind` (recommended) | Bundled, needs `--privileged`. |
-| `latest-dind-rootless` | Bundled, runs as a non-root user (UID 1000) for stronger isolation. Needs `--privileged` and [rootless Docker](https://docs.docker.com/engine/security/rootless/) support on the host. Keeps its image cache in `/home/rootless/.local/share/docker`. |
-| `latest` | None. Mount the host's socket with `-v /var/run/docker.sock:/var/run/docker.sock`, or set `DOCKER_HOST`. |
+| `latest-dind-rootless` | Bundled, runs as UID 1000 for stronger isolation. Needs `--privileged` and [rootless Docker](https://docs.docker.com/engine/security/rootless/) support on the host. Its image cache is in `/home/rootless/.local/share/docker`. |
+| `latest` | None. Mount the host's `/var/run/docker.sock`, or set `DOCKER_HOST`. |
 
-Versioned and `nightly` tags carry the same suffixes, for example `nightly-dind`. The images target Docker, not Podman.
+Versioned and `nightly` tags take the same suffixes, like `nightly-dind`. The images target Docker, not Podman.
 
-### Configuration
+### Example deployments
 
-The runner reads a YAML file. Without one, every option keeps its default.
+See the [examples](examples) directory for more deployments, among them systemd, Kubernetes and VMs.
+
+## Configuration
+
+The runner reads an optional YAML file:
 
 ```bash
 ./gitea-runner config init             # write config.yaml, with no option set
@@ -139,37 +124,68 @@ The runner reads a YAML file. Without one, every option keeps its default.
 ./gitea-runner -c config.yaml daemon   # -c also works on register and cache-server
 ```
 
-`config generate` prints [config.example.yaml](internal/pkg/config/config.example.yaml). Every value in it is commented out, so copy the lines you want to change into your own file and uncomment them.
+`config generate` prints [config.example.yaml](internal/pkg/config/config.example.yaml), which documents every option. Copy the lines you need into your file and uncomment them.
 
-#### Editing a config file
+### Editing a config file
 
-`config` edits a file in place, which is handy in provisioning scripts:
+`config` edits a file in place and keeps its comments, which suits provisioning scripts:
 
 ```bash
 ./gitea-runner config set runner.capacity 4
-./gitea-runner config set runner.timeout 90m  # written as 1h30m0s
 ./gitea-runner config set runner.envs.MY_VAR value
 ./gitea-runner config add runner.labels 'ubuntu:docker://node:22'
 ./gitea-runner config remove runner.labels 'ubuntu:docker://node:22'
 ./gitea-runner config get runner.labels
 ```
 
-A key is its dotted YAML path. An unknown key, a value of the wrong type, or `add`/`remove` on anything but a list is refused before the file is touched. `set` replaces a whole list when you give it several values.
+Keys are dotted YAML paths. Unknown keys and invalid values are refused without touching the file. Without `-c`, it uses `config.yaml` from the working directory, then from the binary's directory.
 
-An edit keeps the comments and the key order of the file. Indentation becomes two spaces, and a blank line between two values is dropped.
+### Environment variables
 
-`config get`, `set`, `add` and `remove` use `config.yaml` (or `config.yml`) from the working directory, then from the directory of the binary, and print their choice to stderr. `config init` writes `config.yaml` in the working directory, and refuses to overwrite an existing config without `--force`. Pass `-c` for another path.
+Config values can read the runner's environment as `${NAME}`, for example `capacity: ${RUNNER_CAPACITY}`. An unset variable fails the load, and `$${NAME}` stays a literal `${NAME}`.
 
-#### Tool cache
+The override variables of earlier releases, such as `GITEA_RUNNER_CAPACITY`, are gone. Set those options in the file instead.
 
-Setup actions like `setup-go` install tools into `RUNNER_TOOL_CACHE`, which is `/opt/hostedtoolcache` inside a job. `runner.tool_cache_mode` selects what backs it:
+### Labels
 
-| Mode | Tool cache | Trade-off |
-| --- | --- | --- |
-| `none` (default) | Per job, provided by the job image | A version the image lacks is downloaded in every job |
-| `shared` | One volume reused by every job | Two jobs writing the same tool version at once corrupt it, so use it only with `runner.capacity: 1` |
+Labels decide which jobs a runner accepts and how it runs them. A job's `runs-on` is matched against the label names, and the first match picks where it runs.
 
-With `none`, tools must come from the job image. Install them into `/opt/hostedtoolcache/<tool>/<version>/<arch>`, with an empty `<arch>.complete` file next to the directory:
+A label is written as `<name>[:<schema>[:<args>]]`, with one of these schemas:
+
+- `docker://<image>` runs the job in a container of `<image>`.
+- `kubernetes://<image>` runs it as a Kubernetes pod, see [docs/kubernetes.md](docs/kubernetes.md).
+- `host`, the default, runs its steps directly on the runner's machine.
+
+With these labels, `runs-on: ubuntu-latest` runs in a container and `runs-on: macos` on the host:
+
+```text
+ubuntu-latest:docker://docker.gitea.com/runner-images:ubuntu-latest,macos:host
+```
+
+[gitea/runner-images](https://gitea.com/gitea/runner-images) has suitable images. Jobs matching no label run in `runner.default_image`, or on the host when docker is unavailable.
+
+Host jobs still need a Docker daemon for Docker actions and `docker://` steps. Windows hosts do not support those, as on GitHub. On Windows, a step's background processes end with the job unless it opts out, see [host mode](docs/host-mode.md).
+
+#### Registration vs config labels
+
+Labels are set at registration, with `--labels` or the prompt. To change them later, use one of these, the leftmost set one wins:
+
+```
+daemon --labels / GITEA_RUNNER_LABELS   >   runner.labels in the config file   >   labels in the .runner file
+```
+
+Changed labels are saved to the `.runner` file and sent to Gitea on startup. When `runner.labels` is set, `register` uses it and ignores `--labels`.
+
+### Tool cache
+
+Setup actions like `setup-go` install tools into `RUNNER_TOOL_CACHE`. `runner.tool_cache_mode` selects what backs it:
+
+| Mode | Tool cache |
+| --- | --- |
+| `none` (default) | Provided by the job image. Versions it lacks are downloaded in every job. |
+| `shared` | One volume for all jobs. Only safe with `runner.capacity: 1`. |
+
+To ship tools in a job image, install them to `/opt/hostedtoolcache/<tool>/<version>/<arch>` with an empty `<arch>.complete` file next to it, as the `-full` [runner images](https://gitea.com/gitea/runner-images) do:
 
 ```dockerfile
 RUN GO=$(curl -fsSL 'https://go.dev/dl/?mode=json' | grep -oP '"version": "\Kgo1\.26\.[0-9]*' | head -1); \
@@ -180,85 +196,29 @@ RUN GO=$(curl -fsSL 'https://go.dev/dl/?mode=json' | grep -oP '"version": "\Kgo1
   touch "${DIR}.complete"
 ```
 
-A workflow requesting a minor version, `go-version: "1.26"`, resolves to the newest matching version in the cache, so a patch update in the image still hits it.
+### Proxy
 
-Of the [runner images](https://gitea.com/gitea/runner-images), the `-full` flavour is the one that ships tools in this layout.
+Set the proxy in the runner's environment, for example with systemd `Environment=` or `docker run -e`:
 
-`gitea-runner exec` reads no config file and takes `--tool-cache-mode` instead, defaulting to `none`.
-
-#### Environment variables
-
-Earlier releases let a few environment variables (`GITEA_DEBUG`, `GITEA_TRACE`, `GITEA_RUNNER_CAPACITY`, `GITEA_RUNNER_FILE`, `GITEA_RUNNER_ENVIRON`, `GITEA_RUNNER_ENV_FILE`) override parts of the config. They are gone, use the YAML file for all settings. Config values can read the runner's environment as `${NAME}`, for example `capacity: ${RUNNER_CAPACITY}`. An unset `NAME` fails the load, and `$${NAME}` is a literal `${NAME}`. The Docker images still read their own variables, such as `RUNNER_STATE_FILE`, see [scripts/run.sh](scripts/run.sh) and the container documentation below.
-
-### Labels
-
-Labels decide **which jobs a runner accepts** and **how it runs them**. A job's `runs-on` is matched against the runner's label names; the first match wins and selects the execution environment for that job.
-
-A label is written as:
-
-```text
-<name>[:<schema>[:<args>]]
+```sh
+http_proxy=http://proxy.example:3128
+https_proxy=http://proxy.example:3128
+no_proxy=gitea.internal,.example.local
 ```
 
-| Part | Meaning |
-| --- | --- |
-| `name` | The name a workflow refers to in `runs-on`, e.g. `ubuntu-latest`. |
-| `schema` | `docker`, `kubernetes` or `host`. Defaults to `host` when omitted. |
-| `args` | Only used by the `docker` and `kubernetes` schemas: the image to run the job in. |
+The runner uses it and passes it on to jobs. Jobs always reach the cache server, `localhost`, their service containers and a `tcp://` Docker daemon directly. Add Gitea to `no_proxy` if it should be reached directly too.
 
-Three schemas are supported:
+To change the proxy for jobs, use `runner.envs`, a step's `env:` or `$GITHUB_ENV`. Workflow and job level `env:` have no effect on it.
 
-- **`docker://<image>`** — the job runs inside a container created from `<image>`:
+The Docker daemon pulls images with its own proxy settings. The `dind` images pass the variables above to it, for other daemons see [the Docker documentation](https://docs.docker.com/engine/daemon/proxy/).
 
-  ```text
-  ubuntu-latest:docker://docker.gitea.com/runner-images:ubuntu-latest
-  ```
+A password in the proxy URL is hidden in logs, but every step can read it.
 
-- **`kubernetes://<image>`** — the job runs as a Kubernetes pod created from `<image>`, see **[docs/kubernetes.md](docs/kubernetes.md)**:
+## Jobs
 
-  ```text
-  ubuntu-latest:kubernetes://docker.gitea.com/runner-images:ubuntu-latest
-  ```
+### Service containers
 
-- **`host`** — the job's steps run directly on the machine the runner is on, using the tools installed there:
-
-  ```text
-  macos:host
-  ```
-
-So with the labels
-
-```text
-ubuntu-latest:docker://docker.gitea.com/runner-images:ubuntu-latest,macos:host
-```
-
-a workflow with `runs-on: ubuntu-latest` is executed in the `runner-images:ubuntu-latest` container, and one with `runs-on: macos` is executed directly on the host.
-
-Names may themselves contain a colon, for example `pool:e57e18d4-10d4-406f-93bf-60f127221bdd`. Only `host`, `docker` and `kubernetes` are treated as schemas.
-
-Jobs run on `runner.default_image` when no runner label matches their `runs-on`: as a pod on runners with `kubernetes` labels, otherwise in a container, or on the host when docker is unavailable. Suitable images are listed at [gitea/runner-images](https://gitea.com/gitea/runner-images).
-
-Labels are chosen at registration time (`--labels`, or the interactive prompt) and can be changed afterwards by editing `runner.labels` in the config file, or in the Gitea UI under the runner's settings.
-
-#### Registration vs config labels
-
-If `runner.labels` is set in the YAML file, those labels are used during `register` and the `--labels` CLI flag is ignored.
-
-The `daemon` command also accepts `--labels` (which defaults to the `GITEA_RUNNER_LABELS` environment variable), so the labels of an already registered runner can be changed without deleting its registration file. The most explicit source wins:
-
-```
---labels / GITEA_RUNNER_LABELS   >   runner.labels in the config file   >   labels in the .runner file
-```
-
-Whenever the resulting labels differ from the ones in the registration file, they are written back to it and re-declared to the Gitea instance on startup.
-
-> **Note:** A runner that only exposes `host` labels still needs access to a Docker daemon (e.g. a mounted `/var/run/docker.sock`) whenever a job uses a `docker://` action or a service container. `host` labels only change where the job's own steps run; container-based steps and actions are still executed with Docker. Windows hosts do not support container actions and `docker://` steps in host jobs, like GitHub's Windows runners.
-
-On Windows hosts, a step's background processes end with the job unless it opts out, see [host-mode background processes](docs/host-mode.md).
-
-#### Service containers
-
-A job's `services` are started before its steps run. When a service's image or its `options` declare a healthcheck, the runner waits for it to report healthy, so a workflow does not have to poll for its own services:
+When a service declares a healthcheck, in its image or `options`, the job waits for it to become healthy:
 
 ```yaml
 services:
@@ -270,65 +230,32 @@ services:
       --health-retries 10
 ```
 
-A service that reports unhealthy fails the job right away, with its container log. One that never becomes healthy fails it after `container.service_ready_timeout` (default `5m`, negative disables the wait). A service that exits without declaring a healthcheck only gets its log and a warning.
+A service that turns unhealthy, or is not healthy within `container.service_ready_timeout`, fails the job. Steps reach a service by its id and port, like `psql -h postgres -p 5432`.
 
-A job in a container reaches a service by its id on the job network, on the port the service listens on, for example `psql -h postgres -p 5432`. The started containers also fill the `job` context: `job.container.{id,network}` and `job.services.<id>.{id,network,ports}`, where `ports` maps a container port to the host port Docker published it on, for the services that publish one.
+Unlike GitHub, jobs running on the host start no services. Give them a `container:` to use services.
 
-Unlike GitHub, a job whose steps run on the host (a `host` label without `container:`) starts no service containers, so `job.services` and `job.container` stay empty. Give such a job a `container:` when it needs services.
+### Docker from a job (`GITEA_DOCKER_WORKSPACE`)
 
-#### Docker from a job (`GITEA_DOCKER_WORKSPACE`)
-
-Containers a job starts through the Docker socket can bind-mount the workspace by the job's own path, as on a host, for example `docker run -v "$PWD:/src"`. Without the Docker proxy, for example with a remote `DOCKER_HOST`, use `GITEA_DOCKER_WORKSPACE`, the path the daemon sees, as the prefix of workspace binds, with `.` as the fallback for local use:
+Containers a job starts can bind-mount the workspace by its path, like `docker run -v "$PWD:/src"`. Where the Docker daemon sees another path, for example a remote `DOCKER_HOST`, prefix the bind with `GITEA_DOCKER_WORKSPACE`:
 
 ```yaml
 volumes:
   - ${GITEA_DOCKER_WORKSPACE:-.}/data:/app/data
 ```
 
-Linux container jobs use a Docker proxy when socket sharing and permissions allow it. Other setups use the daemon socket directly. Host jobs use their existing Docker access, where `.` works. The proxy removes the containers, networks and volumes a job creates, `docker compose` services included, after post steps and the completed hook. Set `container.sweep: false` when jobs deploy services to the runner's Docker daemon.
+In most Linux container jobs, the containers, networks and volumes a job creates are removed when it ends, `docker compose` services included. Set `container.sweep: false` if jobs deploy services to the runner's Docker daemon.
 
-#### Proxy
+### Built-in actions (`uses: builtin:<name>`)
 
-Set these variables in the runner's environment, with systemd `Environment=`, `docker run -e`, or Kubernetes `env:`:
+`uses: builtin:checkout` checks out a repository without downloading `actions/checkout` or needing Node in the job image, see [docs/builtin-actions.md](docs/builtin-actions.md).
 
-```sh
-http_proxy=http://proxy.example:3128
-https_proxy=http://proxy.example:3128
-no_proxy=gitea.internal,.example.local
-```
+### Caching (`actions/cache`)
 
-The runner uses them for its own requests and gives them to every job, in lower and upper case.
+Each runner runs its own cache server. As on GitHub, a job restores caches of its own ref, its pull request's base branch and the default branch.
 
-These hosts are added to `no_proxy` for jobs, so they are always reached directly:
+#### Sharing a cache between runners
 
-- the built-in cache server, whose address is assigned at startup
-- `localhost`, `127.0.0.1` and `::1`
-- the job's service containers
-- the Docker daemon, when it is reached over `tcp://`
-
-Gitea is not added. Add it to `no_proxy` yourself if it should be reached directly.
-
-For one step, set it in the step's `env:`, for the rest of a job, write it to `$GITHUB_ENV`. Setting it at workflow or job level or in `container.env` has no effect. To change it for the whole runner, set it in `runner.envs`. A `no_proxy` set there is added to the list above instead of replacing it.
-
-Images are pulled by the Docker daemon, which needs its own proxy setting. In the `dind` images the daemon runs in the same container and reads the variables above. For any other daemon, see [the Docker documentation](https://docs.docker.com/engine/daemon/proxy/). The runner logs a warning at startup if it has a proxy and the daemon does not.
-
-Dockerfile actions are built with these variables as build arguments, so their `RUN` steps can reach the network.
-
-A password in a proxy URL is hidden in job logs. Any step can still read it, because the step is given the proxy URL in its environment.
-
-#### Built-in actions (`uses: builtin:<name>`)
-
-Use `uses: builtin:checkout` to check out a repository without downloading `actions/checkout` or needing Node in the job image, see **[docs/builtin-actions.md](docs/builtin-actions.md)**.
-
-#### Caching (`actions/cache`)
-
-Each runner starts its own cache server, so runners do not share cached entries. A runner in a container on the jobs' Docker daemon attaches itself to each job network, so jobs reach its cache without extra setup.
-
-As on GitHub, a job restores caches saved for its own ref, its pull request's base branch and the default branch, so a cache saved by a pull request is only restored by that pull request.
-
-**Sharing a cache between runners**
-
-Run one `gitea-runner cache-server` and point every runner at it, using the same secret everywhere, for example from `openssl rand -hex 32`:
+Run one `gitea-runner cache-server` and point every runner at it with the same secret, for example from `openssl rand -hex 32`:
 
 ```yaml
 # cache-server.yaml
@@ -349,13 +276,11 @@ cache:
   external_secret: "<secret>"
 ```
 
-`--dir`, `--host` and `--port` override the matching `cache` keys. Eviction settings take effect on the cache server, not on the runners.
+Runners can also share one `cache.dir` on a file system with working file locks, at the cost of slower requests.
 
-Runners can also share one `cache.dir` on a file system with working file locks, at the cost of slower cache requests.
+#### Storing the cache in an S3-compatible bucket
 
-**Storing the cache in an S3-compatible bucket**
-
-The cache can also be stored in an S3-compatible bucket such as AWS S3, MinIO or RustFS, with no cache server. Runners with the same settings use the same cache:
+Runners can share a cache in an S3-compatible bucket, such as AWS S3, MinIO or RustFS, without a cache server:
 
 ```yaml
 cache:
@@ -369,66 +294,48 @@ cache:
     secret_key_file: "/run/secrets/cache-s3-secret-key"
 ```
 
-A cache saved on one runner can be restored on the others within 30 seconds. The eviction settings below do not apply to the bucket, so add lifecycle rules to it that expire old caches and abort incomplete multipart uploads.
+Eviction does not apply to the bucket. Add lifecycle rules that expire old caches and abort incomplete multipart uploads.
 
-**Eviction**
+#### Eviction
 
-Entries not read or written within `retention` (default `168h`) are removed. A repository over `repo_size_limit` (default `10GB`) loses its least recently used entries, and `size_limit` (off by default) caps the whole cache the same way. Entries in use are never removed. The cache also keeps 1024 MiB free on its volume, or `health_check.min_free_disk_space_mb` when health checks are enabled. See [config.example.yaml](internal/pkg/config/config.example.yaml) for all options.
+Entries unused for `cache.retention` (default `168h`) are removed. A repository over `cache.repo_size_limit` (default `10GB`) loses its least recently used entries. See [config.example.yaml](internal/pkg/config/config.example.yaml) for more limits.
 
-**Cache service v2**
+#### Cache service v2
 
-`actions/cache` v3.4.0, v4.2.0 and later use the cache service v2 API, which the runner serves by default. These actions fall back to v1 on hosts they do not recognize as GitHub, so the runner removes that check from them while a job runs. This also lets the stock `actions/upload-artifact` v4.4.0 and `actions/download-artifact` v4.1.8 and later work without the `gitea-upload-artifact` fork. With `runner.patch_actions: false`, the cache stays on v1 and the artifact actions fail.
+The runner serves the cache service v2 API used by current `actions/cache` releases. It patches them to use it on Gitea, which also makes the stock `actions/upload-artifact` and `actions/download-artifact` v4 work. Artifact calls then go through the cache server, so jobs must be able to reach it.
 
-With v2, artifact calls also go through the cache server, so jobs must be able to reach it. `cache.v2: false` sends them to Gitea directly, unless the Gitea URL has a path or `runner.insecure` is set with HTTPS.
+### Job hooks (`runner.hooks.job_started`, `runner.hooks.job_completed`)
 
-#### Official Docker image
+Hook scripts run where the job's steps run, before the first step and after the last. They match GitHub's `ACTIONS_RUNNER_HOOK_JOB_STARTED` and `ACTIONS_RUNNER_HOOK_JOB_COMPLETED`.
 
-Besides `GITEA_INSTANCE_URL` and `GITEA_RUNNER_REGISTRATION_TOKEN`, the image entrypoint supports optional variables such as `CONFIG_FILE` (passed through as `-c`), `GITEA_RUNNER_LABELS`, `GITEA_RUNNER_EPHEMERAL`, `GITEA_RUNNER_ONCE`, `GITEA_RUNNER_NAME`, `GITEA_MAX_REG_ATTEMPTS`, `RUNNER_STATE_FILE`, and `GITEA_RUNNER_REGISTRATION_TOKEN_FILE`. See [scripts/run.sh](scripts/run.sh) for exact behavior.
+Use them for per-job setup no workflow should carry, like registry logins or masking runner-wide secrets. They block the job, and a non-zero exit fails it. See [docs/job-hooks.md](docs/job-hooks.md).
 
-For a fuller container-oriented walkthrough, see [examples/docker](examples/docker/README.md).
+### Secret masking
 
-While the runner is idle it cleans up after earlier jobs:
-- when `container.bind_workdir` is enabled, stale task workspace directories older than `runner.workdir_cleanup_age` are removed (default: `24h`; set `0` to disable)
-- only purely numeric subdirectories under `container.workdir_parent` are treated as task workspaces and may be removed
-- cleanup assumes `container.workdir_parent` is not shared across multiple runners
-- on runners that use docker, per-job networks and volumes left behind by jobs the runner did not live to tear down are removed once unused and 10 minutes old, identified by the `com.gitea.runner.uuid` label carrying this runner's uuid
-- on runners with `kubernetes` labels, job pods with that label older than `runner.workdir_cleanup_age` are removed the same way, together with their Secrets
-- cleanup runs every `runner.idle_cleanup_interval` (default: `10m`; set `0` to disable), and setting either knob to `0` disables all of the above
+Secrets and `::add-mask::` values are hidden in job logs, [local job logs](#local-job-logs-logjobdir), job summaries and container names. As on GitHub, a job output containing one is dropped with a warning.
 
-#### Post-task script (`runner.post_task_script`)
+## Operation
 
-Optional host script that runs **after** each task's built-in cleanup (post-steps, container teardown, bind-workdir removal). Use it for extra machine housekeeping — Docker pruning, disk cleanup, and similar.
+### Idle cleanup
 
-**While the script runs, the runner stops task heartbeats and stays offline from Gitea's perspective until the script exits (or hits `runner.post_task_script_timeout`, default `5m`).** A script that blocks without exiting keeps the runner from taking new work for up to that timeout. Script output goes to the runner log, not the job log; a non-zero exit is warned but does not change the job result.
+While idle, the runner removes leftovers of earlier jobs every `runner.idle_cleanup_interval` (default `10m`):
 
-On Windows, use `.exe`, `.bat`, or `.cmd` paths; **PowerShell (`.ps1`) is not supported yet** as the configured path — wrap commands in a `.cmd` file instead.
+- Workspaces older than `runner.workdir_cleanup_age` (default `24h`), when `container.bind_workdir` is on. This assumes no other runner shares `container.workdir_parent`.
+- Unused Docker networks and volumes of jobs the runner did not tear down.
+- Kubernetes job pods older than `runner.workdir_cleanup_age`, with their Secrets.
 
-See **[docs/post-task-script.md](docs/post-task-script.md)** for lifecycle details, environment variables, timeout interaction, and platform notes.
+Set either option to `0` to turn cleanup off.
 
-#### Job hooks (`runner.hooks.job_started`, `runner.hooks.job_completed`)
+### Post-task script (`runner.post_task_script`)
 
-Optional scripts that run **inside the job environment** (the job container, or the host in host mode), before the job's first step and after its last one. They are the equivalent of GitHub's `ACTIONS_RUNNER_HOOK_JOB_STARTED` / `ACTIONS_RUNNER_HOOK_JOB_COMPLETED`, which are read when the settings are unset.
+A host script that runs after each task's cleanup, for housekeeping like Docker pruning. The runner takes no new jobs until it exits or hits `runner.post_task_script_timeout` (default `5m`). Its output goes to the runner log.
 
-Because they run where the steps run and see the job's environment, they are the place for per-job setup no workflow should have to carry: registry logins, mirror configuration, or masking runner-wide secrets with `::add-mask::`. Their output is part of the job log and is scanned for workflow commands, and they can export to the job through `$GITHUB_ENV` and `$GITHUB_PATH`.
+On Windows, use an `.exe`, `.bat` or `.cmd` file, PowerShell scripts are not supported. See [docs/post-task-script.md](docs/post-task-script.md).
 
-Both hooks are synchronous and block the job while they run. Either one exiting non-zero fails the job, and there is no per-hook timeout.
+### Local job logs (`log.job.dir`)
 
-See **[docs/job-hooks.md](docs/job-hooks.md)** for the execution order, environment, and platform notes.
+Set `log.job.dir` to keep a copy of every task's log, masked as in Gitea, with the job's result on the last line. Copies are kept for `log.job.retention` (default `168h`), so keep it above `runner.timeout`. Only the runner's user can read them.
 
-#### OpenTelemetry (`OTEL_*`)
+### OpenTelemetry (`OTEL_*`)
 
-Set `OTEL_EXPORTER_OTLP_ENDPOINT` in the runner's environment to send a trace of every job, and the runner's metrics, to an OpenTelemetry collector. See **[docs/telemetry.md](docs/telemetry.md)**.
-
-#### Local job logs (`log.job.dir`)
-
-Set `log.job.dir` to a path and the runner writes a copy of every task's log there as `<start time>-task-<id>.log`: the rows exactly as Gitea received them, with the same secrets masked and the job's result on the last line. Off by default, and what Gitea shows does not change.
-
-#### Secret masking
-
-A job's secrets and its `::add-mask::` values are hidden from what the runner writes and uploads: the job log, the local copy above, job summaries, and the names of the containers it creates. A job output carrying one is skipped with a warning rather than sent masked, as GitHub does, so a downstream `needs.<job>.outputs.<name>` reading it is empty.
-
-`log.job.retention` (default `168h`) is how long a log is kept, expired ones being deleted as new tasks start, and `log.job.max_size` (default `1GB`) caps one log. Keep `retention` above `runner.timeout` so a long job cannot outlive its own log, and prefer local disk, the file is written while the job runs. Only the runner's own user can read it.
-
-### Example Deployments
-
-Check out the [examples](examples) directory for sample deployment types.
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` in the runner's environment to send job traces and runner metrics to an OpenTelemetry collector. See [docs/telemetry.md](docs/telemetry.md).

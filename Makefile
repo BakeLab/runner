@@ -1,6 +1,6 @@
 DIST := dist
-EXECUTABLE := gitea-runner
 GO ?= go
+EXECUTABLE := gitea-runner$(shell $(GO) env GOEXE)
 HAS_GO = $(shell hash $(GO) > /dev/null 2>&1 && echo "GO" || echo "NOGO" )
 
 PODMAN_TEST_IMAGE ?= quay.io/containers/podman:v5.8.9-immutable@sha256:87f42f37fa85b421664c30b8f5f9cfc23920057f5e5fcadf0b6f68d9edc6d415 # renovate: datasource=docker

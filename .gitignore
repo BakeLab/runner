@@ -1,4 +1,5 @@
 /gitea-runner
+/gitea-runner.exe
 .env
 !/act/runner/testdata/secrets/.env
 .runner

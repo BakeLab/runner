@@ -549,6 +549,7 @@ func goOsToActionOs(os string) string {
 		"linux":   "Linux",
 		"darwin":  "macOS",
 		"windows": "Windows",
+		"freebsd": "FreeBSD",
 	}[os], os)
 }
 

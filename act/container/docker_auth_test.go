@@ -1,7 +1,7 @@
 // Copyright 2026 The Gitea Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//go:build !windows && !(WITHOUT_DOCKER || !(linux || darwin || netbsd))
+//go:build !windows && !(WITHOUT_DOCKER || !(linux || darwin || netbsd || freebsd))
 
 package container
 
