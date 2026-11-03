@@ -188,14 +188,23 @@ func TestSetupEnv(t *testing.T) {
 		"RC_KEY":                   "rcvalue",
 		"RUNNER_ENVIRONMENT":       "self-hosted",
 		"RUNNER_PERFLOG":           "/dev/null",
-		"RUNNER_TRACKING_ID":       "",
+		"RUNNER_TRACKING_ID":       env["RUNNER_TRACKING_ID"],
 	}
+	assert.Regexp(t, `^gitea_[A-Z2-7]{26}$`, env["RUNNER_TRACKING_ID"])
 	for name, value := range expected {
 		if suffix, ok := strings.CutPrefix(name, "GITHUB_"); ok {
 			expected["GITEA_"+suffix] = value
 		}
 	}
 	assert.Equal(t, expected, env)
+
+	t.Run("keeps an inherited RUNNER_TRACKING_ID opt-out", func(t *testing.T) {
+		rc.Env["RUNNER_TRACKING_ID"] = ""
+		optedOut := map[string]string{}
+		require.NoError(t, setupEnv(t.Context(), &stepRun{RunContext: rc, Step: step, env: optedOut}))
+		assert.Contains(t, optedOut, "RUNNER_TRACKING_ID")
+		assert.Empty(t, optedOut["RUNNER_TRACKING_ID"])
+	})
 
 	for _, expression := range []string{"inputs.args", "env.ARGS"} {
 		t.Run("deferred inputs from "+expression, func(t *testing.T) {
@@ -408,6 +417,29 @@ func (c *fileCommandTestContainer) GetContainerArchive(ctx context.Context, srcP
 		return nil, err
 	}
 	return c.HostEnvironment.GetContainerArchive(ctx, srcPath)
+}
+
+type windowsFileCommandTestContainer struct {
+	*container.HostEnvironment
+}
+
+func (*windowsFileCommandTestContainer) IsEnvironmentCaseInsensitive() bool { return true }
+
+func TestProcessRunnerEnvFileCommandOrder(t *testing.T) {
+	rc := &RunContext{
+		JobContainer: &windowsFileCommandTestContainer{&container.HostEnvironment{ActPath: t.TempDir()}},
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(rc.JobContainer.GetActPath(), "envs.txt"), []byte("BUILD_MODE=first\nbuild_mode<<EOF\nmiddle\nEOF\nBUILD_MODE=last\n"), 0o600))
+	var entries [][2]string
+	require.NoError(t, processRunnerEnvFileCommand(t.Context(), "envs.txt", rc, func(ctx context.Context, params map[string]string, value string) {
+		entries = append(entries, [2]string{params["name"], value})
+		rc.setEnvFile(ctx, params, value)
+	}))
+	assert.Equal(t, [][2]string{
+		{"BUILD_MODE", "first"}, {"build_mode", "middle"}, {"BUILD_MODE", "last"},
+	}, entries)
+	assert.Equal(t, map[string]string{"BUILD_MODE": "last"}, rc.Env)
+	assert.Equal(t, rc.Env, rc.GlobalEnv)
 }
 
 func TestRunStepExecutorParity(t *testing.T) {

@@ -82,8 +82,8 @@ func (rc *RunContext) runJobHook(ctx context.Context, hookPath, name string) err
 // the first one wrote.
 func (rc *RunContext) setupHookFileCommands(ctx context.Context, env map[string]string) error {
 	actPath := rc.JobContainer.GetActPath()
-	env["GITHUB_ENV"] = path.Join(actPath, hookEnvFileCommand)
-	env["GITHUB_PATH"] = path.Join(actPath, hookPathFileCommand)
+	env["GITHUB_ENV"] = container.JoinPath(actPath, hookEnvFileCommand)
+	env["GITHUB_PATH"] = container.JoinPath(actPath, hookPathFileCommand)
 	aliasGiteaEnv(env)
 
 	return rc.JobContainer.Copy(actPath,
@@ -94,7 +94,7 @@ func (rc *RunContext) setupHookFileCommands(ctx context.Context, env map[string]
 
 func (rc *RunContext) processHookFileCommands(ctx context.Context) error {
 	err := processRunnerEnvFileCommand(ctx, hookEnvFileCommand, rc, rc.setEnvFile)
-	if pathErr := rc.UpdateExtraPath(ctx, path.Join(rc.JobContainer.GetActPath(), hookPathFileCommand)); pathErr != nil && err == nil {
+	if pathErr := rc.UpdateExtraPath(ctx, container.JoinPath(rc.JobContainer.GetActPath(), hookPathFileCommand)); pathErr != nil && err == nil {
 		err = pathErr
 	}
 	return err
@@ -109,7 +109,7 @@ func hookCommand(hookPath string) (cmd []string, shell string) {
 	case ".sh":
 		return []string{"bash", "-e", hookPath}, "bash -e {0}"
 	case ".ps1":
-		return []string{"pwsh", "-command", ". '" + hookPath + "'"}, `pwsh -command ". '{0}'"`
+		return []string{"pwsh", "-command", ". '" + expressionStringEscape(hookPath) + "'"}, `pwsh -command ". '{0}'"`
 	default:
 		return []string{hookPath}, ""
 	}

@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"net"
@@ -28,6 +29,10 @@ import (
 )
 
 var actionFetches sync.Map
+
+var symlink = (*os.Root).Symlink
+
+var symlinkFallback = runtime.GOOS == "windows"
 
 const treeSizes = ".sizes" // beside the tree rather than in it, which is copied into job containers as it is
 
@@ -229,6 +234,8 @@ func extractTree(ctx context.Context, archive io.Reader, dir string, strip bool)
 
 	sha := ""
 	sizes := map[string]int64{}
+	links := map[string]string{}
+	var deferred []string
 	reader := tar.NewReader(archive)
 	for {
 		header, err := reader.Next()
@@ -257,9 +264,8 @@ func extractTree(ctx context.Context, archive io.Reader, dir string, strip bool)
 		case tar.TypeReg:
 			sizes[name], err = writeTreeFile(root, name, header.Mode, reader)
 		case tar.TypeSymlink:
-			if err = root.Symlink(header.Linkname, name); err != nil && runtime.GOOS == "windows" {
-				sizes[name], err = writeTreeFile(root, name, 0, strings.NewReader(header.Linkname))
-			}
+			links[filepath.Clean(name)] = header.Linkname
+			deferred = append(deferred, filepath.Clean(name))
 		}
 		if err != nil {
 			return "", err
@@ -268,10 +274,164 @@ func extractTree(ctx context.Context, archive io.Reader, dir string, strip bool)
 	if !isFullObjectID(sha) {
 		return "", errors.New("the archive names no commit")
 	}
+	linksByParent := map[string][]string{}
+	if symlinkFallback {
+		for name := range links {
+			linksByParent[filepath.Dir(name)] = append(linksByParent[filepath.Dir(name)], filepath.Base(name))
+		}
+	}
+	for requireTarget := symlinkFallback; len(deferred) > 0; {
+		unresolved := deferred[:0]
+		for _, name := range deferred {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			if requireTarget {
+				if _, err := root.Stat(filepath.Dir(name) + string(filepath.Separator) + links[name]); err != nil {
+					unresolved = append(unresolved, name)
+					continue
+				}
+			}
+			if err := symlink(root, links[name], name); err == nil || !symlinkFallback {
+				if err != nil {
+					return "", err
+				}
+				continue
+			}
+			if err := copyTreeLink(ctx, root, name, links, linksByParent, sizes); err != nil {
+				return "", fmt.Errorf("materialize symlink %q: %w", filepath.ToSlash(name), err)
+			}
+		}
+		if len(unresolved) == len(deferred) {
+			requireTarget = false
+		}
+		deferred = unresolved
+	}
 	if err := root.Close(); err != nil {
 		return "", err
 	}
 	return sha, installTree(ctx, dir, sha, temp, sizes)
+}
+
+func resolveTreeLink(name string, links map[string]string) (string, bool) {
+	if !filepath.IsLocal(name) {
+		return "", false
+	}
+	parts := strings.Split(name, string(filepath.Separator))
+	var resolved []string
+	for count := 0; len(parts) > 0; {
+		part := parts[0]
+		parts = parts[1:]
+		switch part {
+		case "", ".":
+			continue
+		case "..":
+			if len(resolved) == 0 {
+				return "", false
+			}
+			resolved = resolved[:len(resolved)-1]
+			continue
+		}
+		target, ok := links[filepath.Join(append(resolved, part)...)]
+		if !ok {
+			resolved = append(resolved, part)
+			continue
+		}
+		count++
+		if target == "" || os.IsPathSeparator(target[0]) || filepath.VolumeName(target) != "" || count > 255 {
+			return "", false
+		}
+		parts = append(strings.Split(filepath.FromSlash(target), string(filepath.Separator)), parts...)
+	}
+	return filepath.Join(append([]string{"."}, resolved...)...), true
+}
+
+var (
+	errTreeLinkTarget = errors.New("unmaterializable symlink target")
+	errTreeLinkCycle  = fmt.Errorf("cyclic %w", errTreeLinkTarget)
+)
+
+func copyTreeLink(ctx context.Context, root *os.Root, name string, links map[string]string, linksByParent map[string][]string, sizes map[string]int64) error {
+	writeLinkText := func(destination, target string) error { // as git writes links it cannot create
+		if err := root.RemoveAll(destination); err != nil {
+			return err
+		}
+		for written := range sizes {
+			if written == destination || strings.HasPrefix(written, destination+string(filepath.Separator)) {
+				delete(sizes, written)
+			}
+		}
+		size, err := writeTreeFile(root, destination, 0o644, strings.NewReader(target))
+		sizes[destination] = size
+		return err
+	}
+	active := map[string]bool{}
+	var copyTarget func(string, string) error
+	copyTarget = func(source, destination string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		source, ok := resolveTreeLink(source, links)
+		if !ok {
+			return errTreeLinkTarget
+		}
+		file, err := root.Open(source)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return errTreeLinkTarget
+			}
+			return err
+		}
+		defer file.Close()
+		info, err := file.Stat()
+		if err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			sizes[destination], err = writeTreeFile(root, destination, int64(info.Mode().Perm()), file)
+			return err
+		}
+		if !info.IsDir() {
+			return errTreeLinkTarget
+		}
+		if active[source] {
+			return errTreeLinkCycle
+		}
+		active[source] = true
+		defer delete(active, source)
+		entries, err := file.ReadDir(-1)
+		if err != nil {
+			return err
+		}
+		children := map[string]bool{}
+		for _, entry := range entries {
+			children[entry.Name()] = true
+		}
+		for _, child := range linksByParent[source] {
+			children[child] = true
+		}
+		if err := root.MkdirAll(destination, info.Mode().Perm()); err != nil {
+			return err
+		}
+		for child := range children {
+			childSource, childDestination := filepath.Join(source, child), filepath.Join(destination, child)
+			err := copyTarget(childSource, childDestination)
+			if target, isLink := links[childSource]; isLink && errors.Is(err, errTreeLinkTarget) && !errors.Is(err, errTreeLinkCycle) {
+				err = writeLinkText(childDestination, target)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := copyTarget(name, name); !errors.Is(err, errTreeLinkTarget) {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return writeLinkText(name, links[name])
 }
 
 var lockTree = AcquireCloneLock // replaced in tests to see installTree wait for a job holding the tree

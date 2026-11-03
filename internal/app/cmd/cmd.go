@@ -46,7 +46,11 @@ func Execute(ctx context.Context) {
 		Use:   "daemon",
 		Short: "Run as a runner daemon",
 		Args:  cobra.MaximumNArgs(0),
-		RunE:  runDaemon(ctx, &daemArgs, &configFile),
+		RunE: func(command *cobra.Command, args []string) error {
+			return runService(ctx, func(ctx context.Context) error {
+				return runDaemon(ctx, &daemArgs, &configFile)(command, args)
+			})
+		},
 	}
 	daemonCmd.Flags().BoolVar(&daemArgs.Once, "once", false, "Run one job then exit")
 	daemonCmd.Flags().StringVar(&daemArgs.Labels, "labels", os.Getenv("GITEA_RUNNER_LABELS"), "Runner labels, comma separated. Overrides the labels of an already registered runner")

@@ -59,9 +59,8 @@ func (r *Runner) checkConfiguredHealth(ctx context.Context) (bool, string) {
 func executeHealthCheck(ctx context.Context, script string, timeout time.Duration, env map[string]string) error {
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(checkCtx, script)
+	cmd := scriptCommand(checkCtx, script)
 	cmd.Env = envListFromMap(env)
-	cmd.SysProcAttr = process.SysProcAttr(script, false)
 	writer := common.NewLineWriter(func(line string) bool {
 		line = strings.TrimRight(line, "\r\n")
 		if line != "" {

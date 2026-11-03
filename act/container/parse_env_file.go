@@ -21,7 +21,12 @@ import (
 
 // parseEnvFile reads a GITHUB_ENV style file, splitting lines like GitHub's runner on Windows or elsewhere.
 func parseEnvFile(e Container, srcPath string, env *map[string]string, windows bool) common.Executor {
-	localEnv := *env
+	return ParseEnvFile(e, srcPath, func(name, value string) {
+		(*env)[name] = value
+	}, windows)
+}
+
+func ParseEnvFile(e Container, srcPath string, setEnv func(name, value string), windows bool) common.Executor {
 	return func(ctx context.Context) error {
 		envTar, err := e.GetContainerArchive(ctx, srcPath)
 		if err != nil {
@@ -64,7 +69,7 @@ func parseEnvFile(e Container, srcPath string, env *map[string]string, windows b
 			multiLineEnv := strings.Index(line, "<<")
 			switch {
 			case singleLineEnv != -1 && (multiLineEnv == -1 || singleLineEnv < multiLineEnv):
-				localEnv[line[:singleLineEnv]] = line[singleLineEnv+1:]
+				setEnv(line[:singleLineEnv], line[singleLineEnv+1:])
 			case multiLineEnv != -1:
 				var multiLineEnvContent []string
 				multiLineEnvDelimiter := line[multiLineEnv+2:]
@@ -86,7 +91,7 @@ func parseEnvFile(e Container, srcPath string, env *map[string]string, windows b
 				if !delimiterFound {
 					return fmt.Errorf("invalid format delimiter '%v' not found before end of file", multiLineEnvDelimiter)
 				}
-				localEnv[line[:multiLineEnv]] = trimEnvLineEnding(strings.Join(multiLineEnvContent, ""), windows)
+				setEnv(line[:multiLineEnv], trimEnvLineEnding(strings.Join(multiLineEnvContent, ""), windows))
 			default:
 				return fmt.Errorf("invalid format '%v', expected a line with '=' or '<<'", line)
 			}

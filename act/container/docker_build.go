@@ -125,6 +125,10 @@ func createBuildContext(ctx context.Context, contextDir, relDockerfile string) (
 }
 
 func writeBuildContext(ctx context.Context, w io.Writer, contextDir string, includes []string, pm *patternmatcher.PatternMatcher) error {
+	contextDir, err := filepath.EvalSymlinks(contextDir)
+	if err != nil {
+		return err
+	}
 	tw := tar.NewWriter(w)
 	seen := map[string]bool{}
 	hardlinks := map[uint64]string{}
@@ -132,8 +136,7 @@ func writeBuildContext(ctx context.Context, w io.Writer, contextDir string, incl
 	for _, include := range includes {
 		include = filepath.FromSlash(include)
 		var parents []parentMatch
-		root := strings.TrimSuffix(contextDir, string(filepath.Separator)) + string(filepath.Separator) + include // unlike filepath.Join, follows a symlinked context dir as docker build does
-		err := filepath.WalkDir(root, func(file string, entry fs.DirEntry, err error) error {
+		err := filepath.WalkDir(filepath.Join(contextDir, include), func(file string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				return leaveOut(ctx, file, err)
 			}
@@ -210,7 +213,7 @@ func addBuildContextEntry(ctx context.Context, tw *tar.Writer, file, rel string,
 			return leaveOut(ctx, file, err)
 		}
 	}
-	header, err := tar.FileInfoHeader(noNameLookups{info}, link)
+	header, err := tar.FileInfoHeader(noNameLookups{info}, filepath.ToSlash(link))
 	if err != nil {
 		return err
 	}

@@ -27,22 +27,25 @@ type Handler interface {
 }
 
 type TarCollector struct {
-	TarWriter *tar.Writer
-	UID       int
-	GID       int
-	DstDir    string
+	TarWriter  *tar.Writer
+	UID        int
+	GID        int
+	DstDir     string
+	Executable bool // Windows has no exec bit, so mark everything executable like docker build
 }
 
 func (tc TarCollector) WriteFile(fpath string, fi fs.FileInfo, linkName string, f io.Reader) error {
 	// create a new dir/file header
-	header, err := tar.FileInfoHeader(fi, linkName)
+	header, err := tar.FileInfoHeader(fi, filepath.ToSlash(linkName))
 	if err != nil {
 		return err
 	}
 
 	// update the name to correctly reflect the desired destination when untaring
 	header.Name = path.Join(tc.DstDir, fpath)
-	header.Mode = int64(fi.Mode())
+	if tc.Executable {
+		header.Mode = header.Mode&0o755 | 0o111
+	}
 	header.Uid = tc.UID
 	header.Gid = tc.GID
 

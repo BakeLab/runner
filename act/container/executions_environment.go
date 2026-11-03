@@ -4,7 +4,18 @@
 
 package container
 
-import "context"
+import (
+	"context"
+	"path"
+	"strings"
+)
+
+func JoinPath(elem ...string) string { // path.Join would collapse the leading // of a UNC act path on a Windows host
+	if len(elem) > 0 && strings.HasPrefix(elem[0], "//") {
+		return "/" + path.Join(elem...)
+	}
+	return path.Join(elem...)
+}
 
 type ExecutionsEnvironment interface {
 	Container

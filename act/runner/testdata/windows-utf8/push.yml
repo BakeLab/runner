@@ -1,0 +1,14 @@
+on: push
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - id: cmd
+        shell: cmd
+        run: echo 你好，世界
+      - id: pwsh
+        shell: pwsh
+        run: echo '你好，世界'
+      - id: powershell
+        shell: powershell
+        run: echo '你好，世界'

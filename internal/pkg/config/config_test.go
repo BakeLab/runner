@@ -109,7 +109,7 @@ cache:
     endpoint: "http://minio:9000"
     bucket: "caches"
     prefix: "/runners/"
-    access_key_file: "` + accessPath + `"
+    access_key_file: '` + accessPath + `'
     secret_key: "secret"
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
@@ -341,20 +341,20 @@ func TestLoadDefault_ExternalCacheSecret(t *testing.T) {
 		{name: "without secret", yaml: externalCache, wantErr: "external_secret"},
 		{name: "inline secret", yaml: externalCache + "  external_secret: \"shh\"\n"},
 		{
-			name: "from file", yaml: externalCache + "  external_secret_file: \"$DIR/cache.secret\"\n",
+			name: "from file", yaml: externalCache + "  external_secret_file: '$DIR/cache.secret'\n",
 			fileContent: "  s3cr3t\n", wantSecret: "s3cr3t",
 		},
 		{
-			name: "from file when disabled", yaml: "\ncache:\n  enabled: false\n  external_secret_file: \"$DIR/cache.secret\"\n",
+			name: "from file when disabled", yaml: "\ncache:\n  enabled: false\n  external_secret_file: '$DIR/cache.secret'\n",
 			fileContent: "s3cr3t", wantSecret: "s3cr3t",
 		},
 		{
-			name: "inline and file conflict", yaml: externalCache + "  external_secret: \"inline\"\n  external_secret_file: \"$DIR/cache.secret\"\n",
+			name: "inline and file conflict", yaml: externalCache + "  external_secret: \"inline\"\n  external_secret_file: '$DIR/cache.secret'\n",
 			fileContent: "s3cr3t", wantErr: "both set",
 		},
-		{name: "missing file", yaml: externalCache + "  external_secret_file: \"$DIR/absent.secret\"\n", wantErr: "read cache.external_secret_file"},
+		{name: "missing file", yaml: externalCache + "  external_secret_file: '$DIR/absent.secret'\n", wantErr: "read cache.external_secret_file"},
 		{
-			name: "empty file", yaml: externalCache + "  external_secret_file: \"$DIR/cache.secret\"\n",
+			name: "empty file", yaml: externalCache + "  external_secret_file: '$DIR/cache.secret'\n",
 			fileContent: "\n  \n", wantErr: "contains no secret",
 		},
 	} {

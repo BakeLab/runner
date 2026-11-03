@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"gitea.com/gitea/runner/act/common"
 	"gitea.com/gitea/runner/act/common/logging"
@@ -30,6 +31,8 @@ import (
 
 	"gitea.dev/actionslib/pkg/exprparser"
 	"gitea.dev/actionslib/pkg/model"
+	unicodeencoding "golang.org/x/text/encoding/unicode"
+	"golang.org/x/text/transform"
 )
 
 const (
@@ -461,7 +464,7 @@ func evaluateJobEnv(ctx context.Context, rc *RunContext) (map[string]string, err
 		}
 	}
 	if workflowEnv != nil {
-		evaluated = mergeMaps(workflowEnv, env)
+		evaluated = rc.mergeEnv(workflowEnv, env)
 		evaluator = rc.NewExpressionEvaluatorWithEnv(ctx, evaluated)
 	}
 	var err error
@@ -569,14 +572,34 @@ func tryUploadJobSummary(ctx context.Context, rc *RunContext) {
 	actPath := rc.JobContainer.GetActPath()
 	// Reuse a single client across all step uploads so connections can be pooled.
 	client := &http.Client{Timeout: jobSummaryUploadRequestTimeout, Transport: rc.Config.instanceTransportFor(base)}
+	maskers := rc.secretMaskers()
+	longestMask := 0
+	for i := 0; i < len(maskers); i += 2 {
+		longestMask = max(longestMask, len(maskers[i]))
+	}
+	masker := NewSecretReplacer(maskers)
+	limit := maxJobSummaryBytes + longestMask
 	for i := range rc.Run.Job().Steps {
-		summaryPath := path.Join(actPath, "workflow", "step-summary-"+strconv.Itoa(i)+".md")
-		body, ok := readSingleFileFromContainerArchive(ctx, rc.JobContainer, summaryPath, maxJobSummaryBytes)
+		summaryPath := container.JoinPath(actPath, "workflow", "step-summary-"+strconv.Itoa(i)+".md")
+		body, ok := readSingleFileFromContainerArchive(ctx, rc.JobContainer, summaryPath, int64(limit+1))
 		if !ok || len(body) == 0 {
 			continue
 		}
-		// Gitea renders summaries on the run page, so mask before the upload.
-		uploadJobSummary(ctx, client, base+strconv.Itoa(i)+"/summary", runtimeToken, []byte(rc.maskSecrets(string(body))))
+		masked := masker.Replace(string(body))
+		split := len(body) > limit
+		if split { // the read can end inside a secret, so keep only what masks alike without the lookahead
+			unsplit := masker.Replace(string(body[:maxJobSummaryBytes]))
+			kept := 0
+			for kept < len(unsplit) && kept < len(masked) && unsplit[kept] == masked[kept] {
+				kept++
+			}
+			for kept > 0 && kept < len(masked) && !utf8.RuneStart(masked[kept]) {
+				kept--
+			}
+			masked = masked[:kept]
+		}
+		body = truncateJobSummary(ctx, []byte(masked), summaryPath, maxJobSummaryBytes, split)
+		uploadJobSummary(ctx, client, base+strconv.Itoa(i)+"/summary", runtimeToken, body)
 	}
 }
 
@@ -690,24 +713,24 @@ func readSingleFileFromContainerArchive(ctx context.Context, env container.Execu
 		if entryName != requestedPath && entryName != path.Base(requestedPath) {
 			continue
 		}
-		// Summaries larger than the limit are truncated rather than dropped, so the
-		// user still gets the leading content (mirroring how GitHub caps oversized
-		// step summaries instead of discarding them). Read one extra byte so an
-		// over-limit file is detected from the actual stream rather than trusting
-		// header.Size, then cap the returned content at maxBytes.
-		b, err := io.ReadAll(io.LimitReader(tr, maxBytes+1))
+		b, err := io.ReadAll(io.LimitReader(transform.NewReader(tr, unicodeencoding.BOMOverride(unicodeencoding.UTF8.NewDecoder())), maxBytes))
 		if err != nil {
 			return nil, false
 		}
-		if int64(len(b)) > maxBytes {
-			// Reserve room for the marker so the marked-up result still fits in maxBytes.
-			marker := []byte(jobSummaryTruncationMarker)
-			keep := max(maxBytes-int64(len(marker)), 0)
-			b = append(b[:keep], marker...)
-			common.Logger(ctx).Warnf("job summary truncated: path=%s max=%d", p, maxBytes)
-		}
 		return b, true
 	}
+}
+
+func truncateJobSummary(ctx context.Context, body []byte, summaryPath string, maxBytes int, split bool) []byte {
+	if !split && len(body) <= maxBytes {
+		return body
+	}
+	keep := max(min(len(body), maxBytes-len(jobSummaryTruncationMarker)), 0)
+	for keep > 0 && keep < len(body) && !utf8.RuneStart(body[keep]) {
+		keep--
+	}
+	common.Logger(ctx).Warnf("job summary truncated: path=%s max=%d", summaryPath, maxBytes)
+	return append(body[:keep], jobSummaryTruncationMarker...)
 }
 
 // useJobStageLogger tags the log entries of a job level executor with the stage they belong to.

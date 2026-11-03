@@ -351,7 +351,7 @@ type containerConfig struct {
 // parse parses the args for the specified command and generates a Config,
 // a HostConfig and returns them with the specified command.
 // If the specified args are not valid, it will return an error.
-func parse(flags *pflag.FlagSet, copts *containerOptions, serverOS string) (*containerConfig, error) { //nolint:gocyclo,unparam // verbatim copy from docker/cli
+func parse(flags *pflag.FlagSet, copts *containerOptions, serverOS string) (*containerConfig, error) { //nolint:gocyclo // verbatim copy from docker/cli
 	var (
 		attachStdin  = copts.attach.Get("stdin")
 		attachStdout = copts.attach.Get("stdout")
@@ -724,6 +724,10 @@ func parse(flags *pflag.FlagSet, copts *containerOptions, serverOS string) (*con
 	}, nil
 }
 
+func isUserDefinedNetwork(mode container.NetworkMode) bool { // Docker's helper uses the host OS instead of the daemon's.
+	return !mode.IsDefault() && mode != network.NetworkBridge && mode != network.NetworkHost && !mode.IsNone() && !mode.IsContainer()
+}
+
 // parseNetworkOpts converts --network advanced options to endpoint-specs, and combines
 // them with the old --network-alias and --links. If returns an error if conflicting options
 // are found.
@@ -752,7 +756,7 @@ func parseNetworkOpts(copts *containerOptions) (map[string]*network.EndpointSett
 	}
 
 	for i, n := range copts.netMode.Value() {
-		if container.NetworkMode(n.Target).IsUserDefined() {
+		if isUserDefinedNetwork(container.NetworkMode(n.Target)) {
 			hasUserDefined = true
 		} else {
 			hasNonUserDefined = true
@@ -814,7 +818,7 @@ func applyContainerOptions(n *opts.NetworkAttachmentOpts, copts *containerOption
 	}
 	// For a user-defined network, "--link" is an endpoint option, it creates an alias. But,
 	// for the default bridge it defines a legacy-link.
-	if container.NetworkMode(n.Target).IsUserDefined() && copts.links.Len() > 0 {
+	if isUserDefinedNetwork(container.NetworkMode(n.Target)) && copts.links.Len() > 0 {
 		n.Links = slices.Clone(copts.links.GetSlice())
 	}
 	if copts.ipv4Address != nil {
@@ -840,7 +844,7 @@ func parseNetworkAttachmentOpt(ep opts.NetworkAttachmentOpts) (*network.Endpoint
 	if strings.TrimSpace(ep.Target) == "" {
 		return nil, errors.New("no name set for network")
 	}
-	if !container.NetworkMode(ep.Target).IsUserDefined() {
+	if !isUserDefinedNetwork(container.NetworkMode(ep.Target)) {
 		if len(ep.Aliases) > 0 {
 			return nil, errors.New("network-scoped aliases are only supported for user-defined networks")
 		}

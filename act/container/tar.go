@@ -36,7 +36,7 @@ func writeFilesTar(ctx context.Context, w io.Writer, uid, gid int, files ...*Fil
 }
 
 // writeDirTar prefixes entries with dstPath for extraction at root.
-func writeDirTar(ctx context.Context, w io.Writer, dstPath, srcPath string, useGitIgnore, skipGitDir bool, uid, gid int) error {
+func writeDirTar(ctx context.Context, w io.Writer, dstPath, srcPath string, useGitIgnore, skipGitDir bool, uid, gid int, executable bool) error {
 	logger := common.Logger(ctx)
 	tw := tar.NewWriter(w)
 	srcPrefix := strings.TrimSuffix(filepath.Dir(srcPath), string(filepath.Separator)) + string(filepath.Separator)
@@ -47,7 +47,7 @@ func writeDirTar(ctx context.Context, w io.Writer, dstPath, srcPath string, useG
 		SrcPrefix:    srcPrefix,
 		SkipGitDir:   skipGitDir,
 		UseGitIgnore: useGitIgnore,
-		Handler:      &filecollector.TarCollector{TarWriter: tw, UID: uid, GID: gid, DstDir: dstPath[1:]},
+		Handler:      &filecollector.TarCollector{TarWriter: tw, UID: uid, GID: gid, DstDir: dstPath[1:], Executable: executable},
 	}).CollectFiles(ctx)); err != nil {
 		return err
 	}

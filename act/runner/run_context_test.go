@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1082,6 +1083,51 @@ func TestRunContextGetEnv(t *testing.T) {
 	}
 }
 
+func TestRunContextEnvCaseSensitivity(t *testing.T) {
+	for _, caseInsensitive := range []bool{false, true} {
+		t.Run(strconv.FormatBool(caseInsensitive), func(t *testing.T) {
+			rc := createIfTestRunContext(map[string]*model.Job{
+				"job1": createJob(t, "runs-on: self-hosted\nenv:\n  build_mode: job\n  config_value: job", ""),
+			})
+			rc.Run.Workflow.Env = map[string]string{"BUILD_MODE": "workflow", "CONFIG_VALUE": "workflow", "PATH": "workflow-path", "runner_tool_cache": "workflow-cache"}
+			rc.Config.Env = map[string]string{"CONFIG_VALUE": "config", "RUNNER_TOOL_CACHE": "configured-cache"}
+			rc.Config.DisableActEnv, rc.Config.NoSkipCheckout = true, true
+			rc.Env = nil
+			rc.GetEnv()
+			rc.JobContainer = fakeContainer{ExecutionsEnvironment: &container.HostEnvironment{}, caseInsensitive: caseInsensitive}
+			require.NoError(t, rc.resolvePlatformImage(t.Context()))
+			if caseInsensitive {
+				assert.Equal(t, map[string]string{"build_mode": "job", "CONFIG_VALUE": "config", "PATH": "workflow-path", "RUNNER_TOOL_CACHE": "configured-cache"}, rc.GetEnv())
+			} else {
+				assert.Equal(t, map[string]string{
+					"BUILD_MODE": "workflow", "build_mode": "job", "CONFIG_VALUE": "config",
+					"config_value": "job", "PATH": "workflow-path", "runner_tool_cache": "workflow-cache", "RUNNER_TOOL_CACHE": "configured-cache",
+				}, rc.GetEnv())
+			}
+			want := maps.Clone(rc.GetEnv())
+			rc.Run.Workflow.Env = nil
+			require.NoError(t, rc.Run.Workflow.RawEnv.Encode(`${{ fromJSON('{"BUILD_MODE":"workflow","CONFIG_VALUE":"workflow","PATH":"workflow-path","runner_tool_cache":"workflow-cache"}') }}`))
+			rc.Env = nil
+			evaluated, err := evaluateJobEnv(t.Context(), rc)
+			require.NoError(t, err)
+			assert.Equal(t, want, evaluated)
+			rc.Env = evaluated
+
+			rc.importHostEnv([]string{"Path=host-path", "HOST_ONLY=value", "RUNNER_TRACKING_ID=parent", "runner_tracking_id=parent-lower"})
+			assert.NotContains(t, rc.Env, "RUNNER_TRACKING_ID")
+			assert.Equal(t, "workflow-path", rc.Env["PATH"])
+			assert.Equal(t, "value", rc.Env["HOST_ONLY"])
+			if caseInsensitive {
+				assert.NotContains(t, rc.Env, "Path")
+				assert.NotContains(t, rc.Env, "runner_tracking_id")
+			} else {
+				assert.Equal(t, "host-path", rc.Env["Path"])
+				assert.Equal(t, "parent-lower", rc.Env["runner_tracking_id"])
+			}
+		})
+	}
+}
+
 func TestSetActionEnvRefreshesInputs(t *testing.T) {
 	rc := &RunContext{}
 	rc.setActionEnv(map[string]string{"INPUT_MSG": "pre"})
@@ -1405,13 +1451,14 @@ func TestGetJobContextReportsContainers(t *testing.T) {
 }
 
 func TestCaptureJobContainerInfoExportsDockerWorkspace(t *testing.T) {
+	workdir := t.TempDir()
 	job := &containerMock{}
 	job.On("Inspect", mock.Anything).Return(&container.Info{
 		ID:     "job-container-id",
-		Mounts: map[string]string{"/workspace": "/var/lib/docker/volumes/job/_data"},
+		Mounts: map[string]string{job.ToContainerPath(workdir): "/var/lib/docker/volumes/job/_data"},
 	}, nil)
 	rc := &RunContext{
-		Config:       &Config{Workdir: "/workspace/owner/repo/"},
+		Config:       &Config{Workdir: filepath.Join(workdir, "owner", "repo") + string(filepath.Separator)},
 		Env:          map[string]string{},
 		JobContainer: job,
 	}
@@ -1421,7 +1468,7 @@ func TestCaptureJobContainerInfoExportsDockerWorkspace(t *testing.T) {
 	assert.Equal(t, "job-container-id", rc.jobContainerID)
 	assert.Equal(t, "/var/lib/docker/volumes/job/_data/owner/repo", rc.Env["GITEA_DOCKER_WORKSPACE"])
 
-	rc.Config.Workdir = "/elsewhere"
+	rc.Config.Workdir = filepath.Dir(workdir)
 	rc.Env = map[string]string{}
 	require.NoError(t, rc.captureJobContainerInfo()(t.Context()))
 	assert.NotContains(t, rc.Env, "GITEA_DOCKER_WORKSPACE")

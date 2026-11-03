@@ -7,8 +7,6 @@ package process
 
 import "context"
 
-// KillProcessesWithCWDUnder is a no-op outside Windows: an open handle does not
-// block os.RemoveAll there.
-func KillProcessesWithCWDUnder(_ context.Context, _ []string) (int, error) {
+func KillProcessesWithPaths(_ctx context.Context, _dirs []string, _trackingID string) (int, error) {
 	return 0, nil
 }

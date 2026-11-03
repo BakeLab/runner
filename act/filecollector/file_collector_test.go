@@ -54,6 +54,7 @@ func TestCollectFilesKeepsWhatGitTracksOrDoesNotIgnore(t *testing.T) {
 	}
 	expected := map[string]string{".gitignore": "", "ign/tracked": "", "nested/kept": "", "renamed": "", "sub/.gitignore": "", "sub/kept": ""}
 	if runtime.GOOS != "windows" {
+		require.NoError(t, os.Chmod(filepath.Join(repoDir, "renamed"), 0o777|os.ModeSticky))
 		require.NoError(t, os.Symlink(".env", filepath.Join(repoDir, "test.env")))
 		expected["test.env"] = ".env"
 	}
@@ -69,6 +70,9 @@ func TestCollectFilesKeepsWhatGitTracksOrDoesNotIgnore(t *testing.T) {
 	for header, err := tr.Next(); err != io.EOF; header, err = tr.Next() {
 		require.NoError(t, err)
 		files[header.Name] = header.Linkname
+		if header.Name == "renamed" && runtime.GOOS != "windows" {
+			assert.Equal(t, int64(0o1777), header.Mode)
+		}
 	}
 	assert.Contains(t, files, ".git/HEAD")
 	maps.DeleteFunc(files, func(name, _ string) bool { return strings.Contains("/"+name, "/.git/") })

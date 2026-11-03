@@ -479,11 +479,15 @@ func (f textFormatter) isColored() bool {
 // such as a container name or a job summary. Masks added at runtime count, so a summary written
 // after ::add-mask:: is covered too.
 func (rc *RunContext) maskSecrets(value string) string {
+	return NewSecretReplacer(rc.secretMaskers()).Replace(value)
+}
+
+func (rc *RunContext) secretMaskers() []string {
 	oldnew := rc.Config.maskers()
 	for _, mask := range rc.Masks {
 		oldnew = AppendSecretMasker(oldnew, mask)
 	}
-	return NewSecretReplacer(oldnew).Replace(value)
+	return oldnew
 }
 
 // maskers is every value this job's configuration says to hide, whatever the sink.

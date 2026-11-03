@@ -557,7 +557,7 @@ func (c *kubernetesContainer) Copy(destPath string, files ...*FileEntry) common.
 func (c *kubernetesContainer) CopyDir(destPath, srcPath string, useGitIgnore, skipGitDir bool) common.Executor {
 	return func(ctx context.Context) error {
 		return c.extract(ctx, destPath, true, func(writer io.Writer) error { // directories are actions and workspaces, megabytes of compressible sources
-			return writeDirTar(ctx, writer, "/", srcPath, useGitIgnore, skipGitDir, 0, 0)
+			return writeDirTar(ctx, writer, "/", srcPath, useGitIgnore, skipGitDir, 0, 0, hostOS == "windows")
 		})
 	}
 }

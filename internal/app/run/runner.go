@@ -168,7 +168,7 @@ func (r *Runner) OnIdle(ctx context.Context) {
 	}
 	// Bind-workdir mode: reclaim stale per-task workspace dirs (numeric task IDs).
 	if r.cfg.Container.BindWorkdir {
-		r.cleanupStaleDirs(ctx, filepath.FromSlash("/"+strings.TrimLeft(r.cfg.Container.WorkdirParent, "/")), isTaskIDDir)
+		r.cleanupStaleDirs(ctx, containerWorkdirRoot(r.cfg.Container.WorkdirParent), isTaskIDDir)
 	}
 	// Host mode: reclaim per-job scratch dirs left behind when HostEnvironment
 	// cleanup timed out (e.g. a delete stalled by an AV/EDR filter driver). They
@@ -557,12 +557,12 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 		actionCloneDepth = 0
 	}
 
-	workdirParent := strings.TrimLeft(r.cfg.Container.WorkdirParent, "/")
+	workdirParent := containerWorkdirRoot(r.cfg.Container.WorkdirParent)
 	if r.cfg.Container.BindWorkdir {
 		// Append the task ID to isolate concurrent jobs from the same repo.
-		workdirParent = fmt.Sprintf("%s/%d", workdirParent, task.Id)
+		workdirParent = filepath.Join(workdirParent, strconv.FormatInt(task.Id, 10))
 	}
-	workdir := filepath.FromSlash(fmt.Sprintf("/%s/%s", workdirParent, preset.Repository))
+	workdir := filepath.Join(workdirParent, filepath.FromSlash(preset.Repository))
 	if runtime.GOOS == "windows" {
 		if abs, err := filepath.Abs(workdir); err == nil {
 			workdir = abs
@@ -648,10 +648,8 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 	reporter.SetOutputs(job.Outputs)
 
 	if r.cfg.Container.BindWorkdir {
-		// Remove the entire task-specific directory (e.g. /workspace/<task_id>).
-		taskDir := filepath.FromSlash("/" + workdirParent)
-		if err := os.RemoveAll(taskDir); err != nil {
-			logging.Warnf("failed to clean up workspace %s: %v", taskDir, err)
+		if err := os.RemoveAll(workdirParent); err != nil {
+			logging.Warnf("failed to clean up workspace %s: %v", workdirParent, err)
 		}
 	}
 
@@ -821,7 +819,7 @@ func (r *Runner) setHealthStatus(ready bool, reason string) {
 func checkFreeDisk(cfg *config.Config) (bool, string) {
 	root := cfg.Host.WorkdirParent
 	if cfg.Container.BindWorkdir {
-		root = filepath.FromSlash("/" + strings.TrimLeft(cfg.Container.WorkdirParent, "/"))
+		root = containerWorkdirRoot(cfg.Container.WorkdirParent)
 	}
 	root = nearestExistingPath(root)
 	available, err := disk.FreeBytes(root)
@@ -833,6 +831,13 @@ func checkFreeDisk(cfg *config.Config) (bool, string) {
 		return false, fmt.Sprintf("low disk space on %s: %d MiB available, %d MiB required", root, availableMB, cfg.HealthCheck.MinFreeDiskSpaceMB)
 	}
 	return true, "ok"
+}
+
+func containerWorkdirRoot(parent string) string {
+	if filepath.IsAbs(parent) {
+		return filepath.Clean(parent)
+	}
+	return filepath.Join(string(filepath.Separator), parent)
 }
 
 func nearestExistingPath(path string) string {

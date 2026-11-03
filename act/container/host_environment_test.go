@@ -161,10 +161,12 @@ func TestHostEnvironmentRemoveWorkdir(t *testing.T) {
 				Path:         filepath.Join(miscRoot, "hostexecutor"),
 				Workdir:      workdir,
 				CleanWorkdir: owned,
-				CleanUp:      func() { _ = os.RemoveAll(miscRoot) },
+				Root:         miscRoot,
 			}
 			require.NoError(t, os.MkdirAll(e.Path, 0o700))
+			require.NoError(t, os.MkdirAll(filepath.Join(miscRoot, "tmp"), 0o700))
 			require.NoError(t, e.Remove()(t.Context()))
+			assert.NoDirExists(t, miscRoot)
 			_, err := os.Stat(workdir)
 			if owned {
 				assert.ErrorIs(t, err, os.ErrNotExist)
@@ -201,87 +203,38 @@ func TestRemoveAllWithContextDoesNotHangOnStuckDelete(t *testing.T) {
 }
 
 func TestHostEnvironmentRemoveDoesNotHang(t *testing.T) {
-	for _, phase := range []string{"CleanUp callback", "path removal"} {
-		t.Run(phase, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				origTimeout := hostCleanupTimeout
-				hostCleanupTimeout = 100 * time.Millisecond
-				t.Cleanup(func() { hostCleanupTimeout = origTimeout })
-				release, stubDone := make(chan struct{}), make(chan struct{})
-				block := func() {
-					defer close(stubDone)
-					<-release
-				}
-				e := &HostEnvironment{Path: filepath.Join(t.TempDir(), "misc", "hostexecutor"), StdOut: os.Stdout}
-				if phase == "CleanUp callback" {
-					e.CleanUp = block
-				} else {
-					origRemoveAll := removeAll
-					removeAll = func(string) error {
-						block()
-						return nil
-					}
-					t.Cleanup(func() { removeAll = origRemoveAll })
-				}
-				t.Cleanup(func() {
-					close(release)
-					<-stubDone
-				})
-				require.NoError(t, os.MkdirAll(e.Path, 0o700))
-				done := make(chan error, 1)
-				go func() { done <- e.Remove()(common.WithLogger(t.Context(), logging.Default())) }()
-				select {
-				case err := <-done:
-					require.NoError(t, err)
-				case <-time.After(10 * time.Second):
-					t.Fatalf("Remove() hung on a stuck %s", phase)
-				}
-			})
+	synctest.Test(t, func(t *testing.T) {
+		origTimeout, origRemoveAll := hostCleanupTimeout, removeAll
+		hostCleanupTimeout = 100 * time.Millisecond
+		release, stubDone := make(chan struct{}), make(chan struct{})
+		removeAll = func(string) error {
+			defer close(stubDone)
+			<-release
+			return nil
+		}
+		t.Cleanup(func() {
+			close(release)
+			<-stubDone
+			hostCleanupTimeout, removeAll = origTimeout, origRemoveAll
 		})
-	}
+		e := &HostEnvironment{Path: filepath.Join(t.TempDir(), "misc", "hostexecutor"), StdOut: os.Stdout}
+		require.NoError(t, os.MkdirAll(e.Path, 0o700))
+		done := make(chan error, 1)
+		go func() { done <- e.Remove()(common.WithLogger(t.Context(), logging.Default())) }()
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("Remove() hung on a stuck path removal")
+		}
+	})
 }
 
-func TestBuildWindowsWorkspaceKillScript(t *testing.T) {
-	t.Run("single dir", func(t *testing.T) {
-		s := buildWindowsWorkspaceKillScript([]string{`C:\workspace\job1`})
-		assert.Contains(t, s, `$paths = @('C:\workspace\job1')`)
-		assert.Contains(t, s, "$selfPid = $PID")
-		assert.Contains(t, s, "$_.ProcessId -eq $selfPid")
-		assert.Contains(t, s, `$prefix = $p + '\'`)
-		assert.Contains(t, s, "$_.ExecutablePath.StartsWith($prefix")
-		assert.Contains(t, s, "$_.CommandLine.IndexOf($prefix")
-		assert.Contains(t, s, "taskkill.exe /PID $_.ProcessId /T /F")
-	})
-
-	t.Run("multiple dirs comma-separated", func(t *testing.T) {
-		s := buildWindowsWorkspaceKillScript([]string{
-			`C:\work\path`,
-			`C:\work\workdir`,
-			`C:\Users\runner\AppData\Local\Temp\job-42`,
-		})
-		assert.Contains(t, s, `'C:\work\path'`)
-		assert.Contains(t, s, `'C:\work\workdir'`)
-		assert.Contains(t, s, `'C:\Users\runner\AppData\Local\Temp\job-42'`)
-		assert.Contains(t, s, `'C:\work\path','C:\work\workdir',`)
-	})
-
-	t.Run("path with single quote is escaped", func(t *testing.T) {
-		s := buildWindowsWorkspaceKillScript([]string{`C:\work\it's\path`})
-		assert.Contains(t, s, `'C:\work\it''s\path'`)
-		assert.NotContains(t, s, `'C:\work\it's\path'`)
-	})
-
-	t.Run("path with wildcard metacharacters is matched literally", func(t *testing.T) {
-		s := buildWindowsWorkspaceKillScript([]string{`C:\work\[job]?1`})
-		assert.Contains(t, s, `'C:\work\[job]?1'`)
-		assert.NotContains(t, s, "-like")
-		assert.Contains(t, s, "StartsWith")
-		assert.Contains(t, s, "IndexOf")
-	})
-
-	t.Run("empty dir list still produces a valid script", func(t *testing.T) {
-		s := buildWindowsWorkspaceKillScript(nil)
-		assert.Contains(t, s, "$paths = @()")
-		assert.Contains(t, s, "Get-CimInstance Win32_Process")
-	})
+func TestJoinPath(t *testing.T) {
+	assert.Equal(t, "//server/share/act/workflow/envs.txt", JoinPath("//server/share/act", "workflow/envs.txt"))
+	assert.Equal(t, "/var/run/act/workflow/envs.txt", JoinPath("/var/run/act/", "workflow", "envs.txt"))
+	for _, root := range []string{"//server/share/act", "/var/run/act", "C:/act"} {
+		assert.Equal(t, root+"/actions/key/main.go.out", JoinPath(root+"/actions/key", "main.go.out"))
+		assert.Equal(t, root+"/workflow", JoinPath(root+"/workflow/outputcmd.txt", ".."))
+	}
 }

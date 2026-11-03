@@ -1,0 +1,21 @@
+name: windows
+on:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+env:
+  DOCKER_CONFIG: /tmp/docker-noauth # see test.yml
+
+jobs:
+  test:
+    name: test on windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.gitea/actions/go-setup
+      - name: prepare anonymous docker config
+        run: mkdir -p "$DOCKER_CONFIG" && echo '{}' > "$DOCKER_CONFIG/config.json"
+      - name: test on windows
+        run: make test-windows

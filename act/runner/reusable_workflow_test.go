@@ -160,8 +160,9 @@ func TestCloneRemoteReusableWorkflowSendsInstanceTokenAndClientCert(t *testing.T
 		Run: &model.Run{JobID: "j1", Workflow: &model.Workflow{Jobs: map[string]*model.Job{"j1": {}}}},
 	}
 
-	require.Error(t, cloneRemoteReusableWorkflow(rc, server.URL+"/owner/repo", "main", t.TempDir())(t.Context()))
-	require.True(t, gotCert)
+	err = cloneRemoteReusableWorkflow(rc, server.URL+"/owner/repo", "main", t.TempDir())(t.Context())
+	require.Error(t, err)
+	require.True(t, gotCert, "clone failed before receiving a client certificate: %v", err)
 	require.Equal(t, "token", gotToken)
 }
 

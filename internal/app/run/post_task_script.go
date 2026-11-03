@@ -8,6 +8,8 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -39,9 +41,8 @@ func (r *Runner) runPostTaskScript(ctx context.Context, reporter *report.Reporte
 	env := r.postTaskScriptEnv(reporter, task, workdir)
 	logging.Infof("running post-task script %q for task %d", script, task.Id)
 
-	cmd := exec.CommandContext(scriptCtx, script)
+	cmd := scriptCommand(scriptCtx, script)
 	cmd.Env = envListFromMap(env)
-	cmd.SysProcAttr = process.SysProcAttr(script, false)
 
 	stdout := postTaskScriptLogWriter("stdout")
 	stderr := postTaskScriptLogWriter("stderr")
@@ -73,6 +74,17 @@ func (r *Runner) runPostTaskScript(ctx context.Context, reporter *report.Reporte
 	} else if err != nil {
 		logging.Warnf("post-task script %q for task %d: %v", script, task.Id, err)
 	}
+}
+
+func scriptCommand(ctx context.Context, script string) *exec.Cmd { // Windows batch files need cmd.exe, CreateProcess cannot start them
+	if ext := strings.ToLower(filepath.Ext(script)); runtime.GOOS == "windows" && (ext == ".bat" || ext == ".cmd") {
+		cmd := exec.CommandContext(ctx, "cmd.exe")
+		cmd.SysProcAttr = process.SysProcAttr(`cmd.exe /d /s /c ""`+script+`""`, false)
+		return cmd
+	}
+	cmd := exec.CommandContext(ctx, script)
+	cmd.SysProcAttr = process.SysProcAttr("", false)
+	return cmd
 }
 
 func postTaskScriptContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {

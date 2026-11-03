@@ -8,16 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-// KillProcessesWithCWDUnder terminates every process in the runner's session
-// whose cwd is one of dirs or below, catching leftovers the path scan misses
-// (Win32_Process exposes no cwd) that still pin a handle. Best-effort.
-func KillProcessesWithCWDUnder(ctx context.Context, dirs []string) (int, error) {
-	if len(dirs) == 0 {
+func KillProcessesWithPaths(ctx context.Context, dirs []string, trackingID string) (int, error) {
+	if len(dirs) == 0 || trackingID == "" {
 		return 0, nil
 	}
 
@@ -38,7 +36,6 @@ func KillProcessesWithCWDUnder(ctx context.Context, dirs []string) (int, error) 
 		if ctx.Err() != nil {
 			break
 		}
-		// Never touch ourselves, System Idle (0) or System (4).
 		if pid == self || pid == 0 || pid == 4 {
 			continue
 		}
@@ -46,7 +43,7 @@ func KillProcessesWithCWDUnder(ctx context.Context, dirs []string) (int, error) 
 		if err := windows.ProcessIdToSessionId(pid, &session); err != nil || session != ownSession {
 			continue
 		}
-		ok, err := terminateIfCWDUnder(pid, dirs)
+		ok, err := terminateIfPathsMatch(pid, dirs, trackingID)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -59,29 +56,50 @@ func KillProcessesWithCWDUnder(ctx context.Context, dirs []string) (int, error) 
 	return killed, errors.Join(errs...)
 }
 
-// terminateIfCWDUnder opens pid once and both reads its cwd and terminates it
-// through that one handle, so a PID recycled between the two cannot be hit.
-func terminateIfCWDUnder(pid uint32, dirs []string) (bool, error) {
-	h, err := windows.OpenProcess(windows.PROCESS_QUERY_INFORMATION|windows.PROCESS_VM_READ|windows.PROCESS_TERMINATE, false, pid)
+func terminateIfPathsMatch(pid uint32, dirs []string, trackingID string) (bool, error) {
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_INFORMATION|windows.PROCESS_VM_READ|windows.PROCESS_TERMINATE, false, pid)
 	if err != nil {
-		return false, nil // best-effort: gone, higher integrity, or another user
-	}
-	defer func() { _ = windows.CloseHandle(h) }()
-
-	cwd, err := processCWDHandle(h)
-	if err != nil || cwd == "" {
 		return false, nil
 	}
+	defer func() { _ = windows.CloseHandle(handle) }()
 
-	for _, d := range dirs {
-		if dirContainsPath(d, cwd) {
-			if err := windows.TerminateProcess(h, 1); err != nil {
-				return false, fmt.Errorf("terminate pid %d: %w", pid, err)
+	params, err := processParametersHandle(handle)
+	if err != nil {
+		return false, nil
+	}
+	matches := false
+fields:
+	for _, field := range []struct {
+		offset  uintptr
+		wow64   uintptr
+		command bool
+	}{
+		{unsafe.Offsetof(windows.RTL_USER_PROCESS_PARAMETERS{}.CurrentDirectory), 0x24, false},
+		{unsafe.Offsetof(windows.RTL_USER_PROCESS_PARAMETERS{}.ImagePathName), 0x38, false},
+		{unsafe.Offsetof(windows.RTL_USER_PROCESS_PARAMETERS{}.CommandLine), 0x40, true},
+	} {
+		value, err := params.unicodeString(handle, field.offset, field.wow64)
+		if err != nil {
+			continue
+		}
+		for _, dir := range dirs {
+			if !field.command && dirContainsPath(dir, value) || field.command && strings.Contains(strings.ToLower(value), strings.ToLower(strings.TrimRight(dir, `\/`)+`\`)) {
+				matches = true
+				break fields
 			}
-			return true, nil
 		}
 	}
-	return false, nil
+	if !matches {
+		return false, nil
+	}
+	value, err := params.environmentVariable(handle, "RUNNER_TRACKING_ID")
+	if err != nil || value != trackingID {
+		return false, nil
+	}
+	if err := windows.TerminateProcess(handle, 1); err != nil {
+		return false, fmt.Errorf("terminate pid %d: %w", pid, err)
+	}
+	return true, nil
 }
 
 // listProcessIDs returns the PIDs of every process in a Toolhelp snapshot.
@@ -107,65 +125,135 @@ func listProcessIDs() ([]uint32, error) {
 	return pids, nil
 }
 
-// processCWDHandle reads a process's working directory from its PEB (walking
-// PEB -> ProcessParameters -> CurrentDirectory.DosPath). h must carry
-// PROCESS_QUERY_INFORMATION|PROCESS_VM_READ.
-func processCWDHandle(h windows.Handle) (string, error) {
+type remoteParameters struct {
+	address uintptr
+	wow64   bool
+}
+
+func processParametersHandle(handle windows.Handle) (remoteParameters, error) {
 	var pbi windows.PROCESS_BASIC_INFORMATION
 	var retLen uint32
-	if err := windows.NtQueryInformationProcess(h, windows.ProcessBasicInformation, unsafe.Pointer(&pbi), uint32(unsafe.Sizeof(pbi)), &retLen); err != nil {
-		return "", err
-	}
-	if pbi.PebBaseAddress == nil {
-		return "", errors.New("nil PEB base address")
+	if err := windows.NtQueryInformationProcess(handle, windows.ProcessBasicInformation, unsafe.Pointer(&pbi), uint32(unsafe.Sizeof(pbi)), &retLen); err != nil {
+		return remoteParameters{}, err
 	}
 	pebAddr := uintptr(unsafe.Pointer(pbi.PebBaseAddress))
-
-	paramsAddr, err := readRemotePtr(h, pebAddr+unsafe.Offsetof(windows.PEB{}.ProcessParameters))
-	if err != nil || paramsAddr == 0 {
-		return "", err
+	wow64 := false
+	if unsafe.Sizeof(uintptr(0)) == 8 {
+		var peb32 uintptr
+		if err := windows.NtQueryInformationProcess(handle, windows.ProcessWow64Information, unsafe.Pointer(&peb32), uint32(unsafe.Sizeof(peb32)), &retLen); err != nil {
+			return remoteParameters{}, err
+		}
+		if peb32 != 0 {
+			pebAddr = peb32
+			wow64 = true
+		}
 	}
+	if pebAddr == 0 {
+		return remoteParameters{}, errors.New("nil PEB base address")
+	}
+	params := remoteParameters{wow64: wow64}
+	address, err := params.pointer(handle, pebAddr+params.offset(unsafe.Offsetof(windows.PEB{}.ProcessParameters), 0x10))
+	if err != nil {
+		return remoteParameters{}, err
+	}
+	if address == 0 {
+		return remoteParameters{}, errors.New("nil process parameters")
+	}
+	params.address = address
+	return params, nil
+}
 
-	// DosPath is the leading NTUnicodeString of CURDIR, so it shares CurrentDirectory's address.
-	dosPathAddr := paramsAddr + unsafe.Offsetof(windows.RTL_USER_PROCESS_PARAMETERS{}.CurrentDirectory)
-	length, err := readRemoteU16(h, dosPathAddr+unsafe.Offsetof(windows.NTUnicodeString{}.Length))
+func (p remoteParameters) offset(native, wow64 uintptr) uintptr {
+	if p.wow64 {
+		return wow64
+	}
+	return native
+}
+
+func (p remoteParameters) pointer(handle windows.Handle, address uintptr) (uintptr, error) {
+	var value uintptr
+	size := unsafe.Sizeof(value)
+	if p.wow64 {
+		size = 4
+	}
+	var read uintptr
+	if err := windows.ReadProcessMemory(handle, address, (*byte)(unsafe.Pointer(&value)), size, &read); err != nil {
+		return 0, err
+	}
+	if read != size {
+		return 0, errors.New("short pointer read")
+	}
+	return value, nil
+}
+
+func (p remoteParameters) unicodeString(handle windows.Handle, native, wow64 uintptr) (string, error) {
+	address := p.address + p.offset(native, wow64)
+	length, err := readRemoteU16(handle, address)
 	if err != nil || length == 0 {
 		return "", err
 	}
-	bufAddr, err := readRemotePtr(h, dosPathAddr+unsafe.Offsetof(windows.NTUnicodeString{}.Buffer))
-	if err != nil || bufAddr == 0 {
+	buffer, err := p.pointer(handle, address+p.offset(unsafe.Offsetof(windows.NTUnicodeString{}.Buffer), 4))
+	if err != nil {
 		return "", err
 	}
-
-	u16 := make([]uint16, (length+1)/2) // round up so an odd Length cannot overflow the buffer
-	var n uintptr
-	if err := windows.ReadProcessMemory(h, bufAddr, (*byte)(unsafe.Pointer(&u16[0])), uintptr(length), &n); err != nil {
+	value := make([]uint16, (int(length)+1)/2)
+	var read uintptr
+	if err := windows.ReadProcessMemory(handle, buffer, (*byte)(unsafe.Pointer(&value[0])), uintptr(length), &read); err != nil {
 		return "", err
 	}
-	if n != uintptr(length) {
-		return "", errors.New("short read of working directory")
+	if read != uintptr(length) {
+		return "", errors.New("short string read")
 	}
-	return windows.UTF16ToString(u16), nil
+	return windows.UTF16ToString(value), nil
 }
 
-// readRemotePtr reads a single pointer-sized value from another process.
-func readRemotePtr(h windows.Handle, addr uintptr) (uintptr, error) {
-	var v uintptr
-	var n uintptr
-	if err := windows.ReadProcessMemory(h, addr, (*byte)(unsafe.Pointer(&v)), unsafe.Sizeof(v), &n); err != nil {
-		return 0, err
+func (p remoteParameters) environmentVariable(handle windows.Handle, name string) (string, error) {
+	address, err := p.pointer(handle, p.address+p.offset(unsafe.Offsetof(windows.RTL_USER_PROCESS_PARAMETERS{}.Environment), 0x48))
+	if err != nil || address == 0 {
+		return "", err
 	}
-	if n != unsafe.Sizeof(v) {
-		return 0, errors.New("short pointer read")
+	var entry []uint16
+	for consumed := uintptr(0); consumed < 32*1024*1024; {
+		var region windows.MemoryBasicInformation
+		if err := windows.VirtualQueryEx(handle, address+consumed, &region, unsafe.Sizeof(region)); err != nil {
+			return "", err
+		}
+		size := min(uintptr(4096), region.BaseAddress+region.RegionSize-address-consumed)
+		if size < 2 {
+			return "", errors.New("invalid environment region")
+		}
+		buffer := make([]uint16, size/2)
+		var read uintptr
+		if err := windows.ReadProcessMemory(handle, address+consumed, (*byte)(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)*2), &read); err != nil {
+			return "", err
+		}
+		if read != uintptr(len(buffer)*2) {
+			return "", errors.New("short environment read")
+		}
+		for _, value := range buffer {
+			if value != 0 {
+				entry = append(entry, value)
+				continue
+			}
+			if len(entry) == 0 {
+				return "", nil
+			}
+			key, value, ok := strings.Cut(windows.UTF16ToString(entry), "=")
+			if ok && strings.EqualFold(key, name) {
+				return value, nil
+			}
+			entry = entry[:0]
+		}
+		consumed += read
 	}
-	return v, nil
+	return "", errors.New("environment exceeds read limit")
 }
 
 // readRemoteU16 reads a single uint16 from another process.
-func readRemoteU16(h windows.Handle, addr uintptr) (uint16, error) {
+func readRemoteU16(handle windows.Handle, addr uintptr) (uint16, error) {
 	var v uint16
 	var n uintptr
-	if err := windows.ReadProcessMemory(h, addr, (*byte)(unsafe.Pointer(&v)), unsafe.Sizeof(v), &n); err != nil {
+	if err := windows.ReadProcessMemory(handle, addr, (*byte)(unsafe.Pointer(&v)), unsafe.Sizeof(v), &n); err != nil {
 		return 0, err
 	}
 	if n != unsafe.Sizeof(v) {

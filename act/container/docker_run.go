@@ -366,6 +366,7 @@ type containerReference struct {
 	id         string
 	input      *NewContainerInput
 	pullPolicy string
+	daemonOS   string
 	UID        int
 	GID        int
 	// attachDone is closed by the attach() streaming goroutine once it has
@@ -375,13 +376,18 @@ type containerReference struct {
 	LinuxContainerEnvironmentExtensions
 }
 
-func GetDockerClient(ctx context.Context) (cli client.APIClient, err error) {
+func GetDockerClient(ctx context.Context) (client.APIClient, error) {
+	cli, _, err := newDockerClient(ctx)
+	return cli, err
+}
+
+func newDockerClient(ctx context.Context) (cli client.APIClient, daemonOS string, err error) {
 	dockerHost := os.Getenv("DOCKER_HOST")
 
 	if strings.HasPrefix(dockerHost, "ssh://") {
 		var args []string
 		if args, err = sshArgs(dockerHost); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		cli, err = client.New(
 			client.WithHost("http://docker.example.com"), // the dialer below ignores the address
@@ -391,16 +397,17 @@ func GetDockerClient(ctx context.Context) (cli client.APIClient, err error) {
 		cli, err = client.New(client.FromEnv)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to docker daemon: %w", err)
+		return nil, "", fmt.Errorf("failed to connect to docker daemon: %w", err)
 	}
 	// Best-effort API version negotiation, matching the old client.NegotiateAPIVersion
 	// behaviour. Ping failures here are non-fatal: the connection is exercised again on
 	// the first real call, and the client falls back to the daemon's default API version.
-	if _, err := cli.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true}); err != nil {
+	ping, err := cli.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
+	if err != nil {
 		common.Logger(ctx).Warnf("docker daemon ping during version negotiation failed, continuing: %v", err)
 	}
 
-	return cli, nil
+	return cli, ping.OSType, nil
 }
 
 func GetHostInfo(ctx context.Context) (system.Info, error) {
@@ -440,16 +447,32 @@ func RunnerArch(ctx context.Context) string {
 	return info.Architecture
 }
 
+func (cr *containerReference) targetOS(ctx context.Context) string {
+	if cr.daemonOS == "" {
+		cr.daemonOS = "linux"
+		if cr.cli != nil {
+			if result, err := cr.cli.Info(ctx, client.InfoOptions{}); err == nil && result.Info.OSType != "" {
+				cr.daemonOS = result.Info.OSType
+			}
+		}
+	}
+	return cr.daemonOS
+}
+
+func (cr *containerReference) markExecutable(ctx context.Context) bool {
+	return hostOS == "windows" && cr.targetOS(ctx) == "linux"
+}
+
 func (cr *containerReference) connect() common.Executor {
 	return func(ctx context.Context) error {
 		if cr.cli != nil {
 			return nil
 		}
-		cli, err := GetDockerClient(ctx)
+		cli, daemonOS, err := newDockerClient(ctx)
 		if err != nil {
 			return err
 		}
-		cr.cli = cli
+		cr.cli, cr.daemonOS = cli, daemonOS
 		return nil
 	}
 }
@@ -459,6 +482,7 @@ func (cr *containerReference) Close() common.Executor {
 		if cr.cli != nil {
 			err := cr.cli.Close()
 			cr.cli = nil
+			cr.daemonOS = ""
 			if err != nil {
 				return fmt.Errorf("failed to close client: %w", err)
 			}
@@ -603,7 +627,8 @@ func (cr *containerReference) mergeContainerConfigs(ctx context.Context, config 
 		copts.privileged = false
 	}
 
-	containerConfig, err := parse(flags, copts, runtime.GOOS)
+	serverOS := cr.targetOS(ctx)
+	containerConfig, err := parse(flags, copts, serverOS)
 	if err != nil {
 		return fmt.Errorf("cannot process container options: '%s': '%w'", options, err)
 	}
@@ -618,7 +643,7 @@ func (cr *containerReference) mergeContainerConfigs(ctx context.Context, config 
 
 	// For Gitea, forcing --privileged off is not enough, other options reach the host too
 	if !hostConfig.Privileged {
-		trusted, err := parseOptionsHostConfig(cr.input.RunnerOptions)
+		trusted, err := parseOptionsHostConfig(cr.input.RunnerOptions, serverOS)
 		if err != nil {
 			return err
 		}
@@ -731,9 +756,7 @@ func (cr *containerReference) create(capAdd, capDrop []string) common.Executor {
 		cr.sanitizeConfig(ctx, hostConfig)
 
 		var networkingConfig *network.NetworkingConfig
-		n := hostConfig.NetworkMode
-		// IsUserDefined and IsHost are broken on windows
-		if n.IsUserDefined() && n != "host" && len(input.NetworkAliases) > 0 {
+		if isUserDefinedNetwork(hostConfig.NetworkMode) && len(input.NetworkAliases) > 0 {
 			networkingConfig = &network.NetworkingConfig{
 				EndpointsConfig: map[string]*network.EndpointSettings{
 					input.NetworkMode: {Aliases: input.NetworkAliases},
@@ -919,7 +942,7 @@ func (cr *containerReference) copyDir(dstPath, srcPath string, useGitIgnore, ski
 		if actPath := cr.GetActPath(); strings.HasPrefix(dstPath+"/", actPath+"/") {
 			extractionRoot = actPath // keeps tar entries from crossing the image's /var/run symlink
 		}
-		if err := writeDirTar(ctx, tarFile, path.Join("/", strings.TrimPrefix(dstPath, extractionRoot)), srcPath, useGitIgnore, skipGitDir, cr.UID, cr.GID); err != nil {
+		if err := writeDirTar(ctx, tarFile, path.Join("/", strings.TrimPrefix(dstPath, extractionRoot)), srcPath, useGitIgnore, skipGitDir, cr.UID, cr.GID, cr.markExecutable(ctx)); err != nil {
 			return err
 		}
 
@@ -1090,12 +1113,12 @@ func resetOption[T any](logger *logging.Logger, option string, field *T, trusted
 
 // parseOptionsHostConfig parses one options string on its own, to see what it alone asks for.
 // Even "" goes through the parser, or its empty slices and maps would differ from a real parse.
-func parseOptionsHostConfig(options string) (*container.HostConfig, error) {
+func parseOptionsHostConfig(options, serverOS string) (*container.HostConfig, error) {
 	flags, copts, _, err := parseContainerOptions(options)
 	if err != nil {
 		return nil, err
 	}
-	containerConfig, err := parse(flags, copts, runtime.GOOS)
+	containerConfig, err := parse(flags, copts, serverOS)
 	if err != nil {
 		return nil, fmt.Errorf("cannot process container options: '%s': '%w'", options, err)
 	}

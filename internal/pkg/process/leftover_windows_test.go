@@ -7,21 +7,21 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/windows"
 )
 
-// startSleeperIn launches a long-running child whose cwd is dir but whose
-// executable lives outside it — what the path scan cannot see.
-func startSleeperIn(t *testing.T, dir string) *exec.Cmd {
+func startSleeperIn(t *testing.T, system, dir, trackingID string) *exec.Cmd {
 	t.Helper()
-	ping := filepath.Join(os.Getenv("SystemRoot"), "System32", "ping.exe")
-	cmd := exec.Command(ping, "-n", "60", "127.0.0.1")
+	cmd := exec.Command(filepath.Join(os.Getenv("SystemRoot"), system, "ping.exe"), "-n", "60", "127.0.0.1")
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "RUNNER_TRACKING_ID="+trackingID)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	require.NoError(t, cmd.Start())
 	t.Cleanup(func() {
@@ -31,19 +31,19 @@ func startSleeperIn(t *testing.T, dir string) *exec.Cmd {
 	return cmd
 }
 
-// processCWD opens pid and reads its working directory. Test-only; the reaper
-// shares one handle across read and kill via processCWDHandle.
 func processCWD(pid uint32) (string, error) {
 	h, err := windows.OpenProcess(windows.PROCESS_QUERY_INFORMATION|windows.PROCESS_VM_READ, false, pid)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = windows.CloseHandle(h) }()
-	return processCWDHandle(h)
+	params, err := processParametersHandle(h)
+	if err != nil {
+		return "", err
+	}
+	return params.unicodeString(h, unsafe.Offsetof(windows.RTL_USER_PROCESS_PARAMETERS{}.CurrentDirectory), 0x24)
 }
 
-// awaitCWD waits until pid's PEB reports a readable cwd (not populated the
-// instant the process starts) and returns it.
 func awaitCWD(t *testing.T, pid int) string {
 	t.Helper()
 	var cwd string
@@ -55,36 +55,52 @@ func awaitCWD(t *testing.T, pid int) string {
 	return cwd
 }
 
-func TestProcessCWDReadsWorkingDirectory(t *testing.T) {
-	dir := t.TempDir()
-	cmd := startSleeperIn(t, dir)
-	cwd := awaitCWD(t, cmd.Process.Pid)
-	require.True(t, dirContainsPath(dir, cwd), "cwd %q should be within %q", cwd, dir)
+func TestKillProcessesWithPathsTracking(t *testing.T) {
+	for _, system := range []string{"System32", "SysWOW64"} {
+		for _, trackingID := range []string{"leftover-test", "", "another-job"} {
+			t.Run(system+"/tracking="+trackingID, func(t *testing.T) {
+				if system == "SysWOW64" {
+					if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+						t.Skip("needs a 64-bit runner")
+					}
+					if _, err := os.Stat(filepath.Join(os.Getenv("SystemRoot"), system, "ping.exe")); err != nil {
+						t.Skip("32-bit Windows tools unavailable")
+					}
+				}
+				dir := t.TempDir()
+				cmd := startSleeperIn(t, system, dir, trackingID)
+				require.True(t, dirContainsPath(dir, awaitCWD(t, cmd.Process.Pid)))
+				killed, err := KillProcessesWithPaths(t.Context(), []string{t.TempDir()}, "leftover-test")
+				require.NoError(t, err)
+				require.Zero(t, killed)
+				killed, err = KillProcessesWithPaths(t.Context(), []string{dir}, "leftover-test")
+				require.NoError(t, err)
+				if trackingID == "leftover-test" {
+					require.Equal(t, 1, killed)
+					require.Eventually(t, func() bool {
+						return !processAlive(cmd.Process.Pid)
+					}, 5*time.Second, 50*time.Millisecond)
+				} else {
+					require.Zero(t, killed)
+					require.True(t, processAlive(cmd.Process.Pid))
+				}
+			})
+		}
+	}
 }
 
-func TestKillProcessesWithCWDUnderTerminatesMatch(t *testing.T) {
-	dir := t.TempDir()
-	// Executable outside dir and arguments carry no workspace path, so only the
-	// working directory links this process to dir.
-	cmd := startSleeperIn(t, dir)
-	awaitCWD(t, cmd.Process.Pid)
-
-	killed, err := KillProcessesWithCWDUnder(t.Context(), []string{dir})
+func TestKillProcessesWithPathsCommandLine(t *testing.T) {
+	workspace := t.TempDir()
+	cmd, ready := newTestProcess(t, "child", false)
+	cmd.Dir = t.TempDir()
+	cmd.Args = append(cmd.Args, filepath.Join(workspace, "reference"))
+	cmd.Env = append(cmd.Env, "RUNNER_TRACKING_ID=command-test")
+	require.NoError(t, cmd.Start())
+	ready()
+	killed, err := KillProcessesWithPaths(t.Context(), []string{workspace}, "command-test")
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, killed, 1)
-
+	require.Equal(t, 1, killed)
 	require.Eventually(t, func() bool {
 		return !processAlive(cmd.Process.Pid)
-	}, 5*time.Second, 50*time.Millisecond, "matched process should exit")
-}
-
-func TestKillProcessesWithCWDUnderSparesUnrelated(t *testing.T) {
-	workspace := t.TempDir()
-	elsewhere := t.TempDir()
-	cmd := startSleeperIn(t, elsewhere)
-	awaitCWD(t, cmd.Process.Pid)
-
-	_, err := KillProcessesWithCWDUnder(t.Context(), []string{workspace})
-	require.NoError(t, err)
-	require.True(t, processAlive(cmd.Process.Pid), "process outside owned dirs must be spared")
+	}, 5*time.Second, 50*time.Millisecond)
 }

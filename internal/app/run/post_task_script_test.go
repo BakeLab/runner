@@ -7,10 +7,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"gitea.com/gitea/runner/act/common/logging"
+	"gitea.com/gitea/runner/act/common/logging/logtest"
 	"gitea.com/gitea/runner/internal/pkg/config"
 	"gitea.com/gitea/runner/internal/pkg/metrics"
 	"gitea.com/gitea/runner/internal/pkg/report"
@@ -39,9 +41,15 @@ func TestRunPostTaskScriptSkippedWhenEmpty(t *testing.T) {
 }
 
 func TestRunPostTaskScriptNonZeroExitDoesNotPanic(t *testing.T) {
+	hook := logtest.SetDefault(t)
 	dir := t.TempDir()
 	scriptPath := filepath.Join(dir, "fail.sh")
-	require.NoError(t, os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 2\n"), 0o700))
+	script := "#!/bin/sh\nexit 2\n"
+	if runtime.GOOS == "windows" {
+		scriptPath = filepath.Join(dir, "fail.cmd")
+		script = "@exit /b 2\r\n"
+	}
+	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o700))
 
 	cfg, err := config.LoadDefault("")
 	require.NoError(t, err)
@@ -59,6 +67,8 @@ func TestRunPostTaskScriptNonZeroExitDoesNotPanic(t *testing.T) {
 	require.NotPanics(t, func() {
 		r.runPostTaskScript(ctx, reporter, task, "/workspace/owner/repo")
 	})
+	require.NotNil(t, hook.LastRecord())
+	assert.Contains(t, hook.LastRecord().Message, "exited with code 2")
 }
 
 func TestPostTaskScriptContextUsesFullTimeout(t *testing.T) {
@@ -113,10 +123,15 @@ func TestPostTaskScriptEnv(t *testing.T) {
 }
 
 func TestRunPostTaskScriptIntegration(t *testing.T) {
-	dir := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "script directory")
+	require.NoError(t, os.Mkdir(dir, 0o700))
 	outFile := filepath.Join(dir, "out.txt")
 	scriptPath := filepath.Join(dir, "post-task.sh")
 	script := "#!/bin/sh\nprintf '%s %s %s' \"$GITEA_TASK_ID\" \"$GITEA_JOB_RESULT\" \"$CUSTOM\" > \"" + outFile + "\"\n"
+	if runtime.GOOS == "windows" {
+		scriptPath = filepath.Join(dir, "post-task.cmd")
+		script = "@echo off\r\n<nul set /p \"=%GITEA_TASK_ID% %GITEA_JOB_RESULT% %CUSTOM%\" > \"" + outFile + "\"\r\nexit /b 0\r\n"
+	}
 	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o700))
 
 	cfg, err := config.LoadDefault("")

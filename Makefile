@@ -8,6 +8,7 @@ E2E_JOB_IMAGE ?= docker.gitea.com/runner-images:ubuntu-latest@sha256:657378e5cfd
 SERVICE_IMAGE ?= nginx:1.31.7-alpine@sha256:892bb2152464f0c5d8972593a5f5afaf8054552580b699d95f8ff4af08c2d33d # renovate: datasource=docker
 E2E_GITEA_IMAGE ?= gitea/gitea:main-nightly
 E2E_K3S_IMAGE ?= rancher/k3s:v1.37.1-k3s1@sha256:ca7f37d993d82ef0dcdcfecb2e0e2618ea541dbaffc620c8cedebe01a82acd0d # renovate: datasource=docker
+WINDOWS_TEST_IMAGE ?= dockurr/windows:6.06@sha256:16fd7c39a3e48bb946d29c59dc6015942e5b900a1fa5d7e5552053bfc48ee2ea # renovate: datasource=docker
 
 GOFILES := $(shell find . -type f -name "*.go" -o -name "go.mod" ! -name "generated.*")
 
@@ -149,6 +150,10 @@ coverage-report: ## turn coverage.txt from `make test` into .tmp/coverage.md
 .PHONY: test-dind
 test-dind: ## run the daemon-facing tests against the built dind image or podman (TARGET=dind|dind-rootless|podman)
 	@PODMAN_TEST_IMAGE=$(PODMAN_TEST_IMAGE) ./scripts/test-dind.sh $(TARGET)
+
+.PHONY: test-windows
+test-windows: ## run the tests on Windows Server Core in a QEMU VM on the docker host
+	@WINDOWS_TEST_IMAGE=$(WINDOWS_TEST_IMAGE) ./scripts/test-windows.sh
 
 E2E_CONCURRENCY ?= 8
 

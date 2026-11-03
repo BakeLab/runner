@@ -32,7 +32,8 @@ const treeKillWaitDelay = 10 * time.Second
 // Callers still set cmd.SysProcAttr (via SysProcAttr) themselves, because the
 // value differs between the plain and PTY execution paths.
 type TreeKill struct {
-	killer atomic.Pointer[Killer]
+	killer        atomic.Pointer[Killer]
+	KeepLeftovers bool
 }
 
 // NewTreeKill sets cmd.Cancel and cmd.WaitDelay. Call it before cmd.Start, then
@@ -72,13 +73,13 @@ func (t *TreeKill) Capture(p *os.Process) (*Killer, error) {
 	return k, nil
 }
 
-// Wait is cmd.Wait, but like GitHub's runner a leftover holding a successful command's output does not fail it, and is killed only on Windows.
+// Wait is cmd.Wait, but like GitHub's runner a leftover holding a successful command's output does not fail it.
 func (t *TreeKill) Wait(ctx context.Context, cmd *exec.Cmd) error {
 	err := cmd.Wait()
 	if !errors.Is(err, exec.ErrWaitDelay) || ctx.Err() != nil {
 		return err
 	}
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == "windows" && !t.KeepLeftovers {
 		_ = t.killer.Load().Kill()
 	}
 	return nil

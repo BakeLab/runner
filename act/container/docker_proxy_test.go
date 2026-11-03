@@ -484,6 +484,10 @@ type probeClient struct {
 	containers []container.Summary
 }
 
+func (c *probeClient) Info(_ctx context.Context, _opts mobyclient.InfoOptions) (mobyclient.SystemInfoResult, error) {
+	return mobyclient.SystemInfoResult{}, nil
+}
+
 func (c *probeClient) Close() error {
 	return nil
 }
@@ -766,6 +770,9 @@ func TestDaemonSeesDir(t *testing.T) {
 }
 
 func TestRunnerContainerWorkdir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a runner container is Linux")
+	}
 	workdir := t.TempDir()
 	t.Chdir(workdir)
 	volume := container.MountPoint{Type: mount.TypeVolume, Source: "/daemon/_data", Destination: filepath.Dir(workdir)}

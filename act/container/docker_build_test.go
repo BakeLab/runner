@@ -50,7 +50,7 @@ func TestCreateBuildContextFollowsDockerignoreAndSymlinkedRootButKeepsDockerfile
 
 	contexts := []string{dir}
 	if link := filepath.Join(t.TempDir(), "link"); os.Symlink(dir, link) == nil {
-		contexts = append(contexts, link+string(filepath.Separator))
+		contexts = append(contexts, link, link+string(filepath.Separator))
 	}
 
 	for _, contextDir := range contexts {

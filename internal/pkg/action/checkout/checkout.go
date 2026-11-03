@@ -42,7 +42,10 @@ func Main(ctx context.Context, c *action.Context) (err error) {
 			return fmt.Errorf("checkout: unsupported input %q", name)
 		}
 	}
-	dst, err := workspaceDestination(c.Workspace, c.Inputs["path"])
+	runnerContext := c.Container.GetRunnerContext(ctx)
+	executionOS, _ := runnerContext["os"].(string)
+	windows := strings.EqualFold(executionOS, "windows")
+	dst, err := workspaceDestination(c.Workspace, c.Inputs["path"], windows)
 	if err != nil {
 		return err
 	}
@@ -63,8 +66,8 @@ func Main(ctx context.Context, c *action.Context) (err error) {
 				return err
 			}
 		}
-		if output := c.Env["GITHUB_OUTPUT"]; output != "" {
-			return c.Container.Copy(path.Dir(output), &container.FileEntry{Name: path.Base(output), Mode: 0o666, Body: fmt.Sprintf("ref=%s\ncommit=%s\n", ghc.Ref, ghc.Sha)})(ctx)
+		if output := filepath.ToSlash(c.Env["GITHUB_OUTPUT"]); output != "" {
+			return c.Container.Copy(container.JoinPath(output, ".."), &container.FileEntry{Name: path.Base(output), Mode: 0o666, Body: fmt.Sprintf("ref=%s\ncommit=%s\n", ghc.Ref, ghc.Sha)})(ctx)
 		}
 		return nil
 	}
@@ -72,6 +75,7 @@ func Main(ctx context.Context, c *action.Context) (err error) {
 	co := &checkout{
 		url:       strings.TrimSuffix(ghc.ServerURL, "/") + "/" + repository,
 		dst:       dst,
+		windows:   windows,
 		ref:       ref,
 		depth:     depth,
 		fetchTags: boolInput(c.Inputs, "fetch-tags", false),
@@ -114,10 +118,11 @@ func Main(ctx context.Context, c *action.Context) (err error) {
 	}
 
 	// named like actions/checkout's, which create-pull-request knows to hide, and gone with the job
-	runnerTemp, _ := c.Container.GetRunnerContext(ctx)["temp"].(string)
+	runnerTemp, _ := runnerContext["temp"].(string)
+	runnerTemp = filepath.ToSlash(runnerTemp)
 	digest := sha256.Sum256([]byte(dst))
 	credentials := fmt.Sprintf("git-credentials-%x.config", digest[:8])
-	co.credentials = path.Join(runnerTemp, credentials)
+	co.credentials = container.JoinPath(runnerTemp, credentials)
 	persist := boolInput(c.Inputs, "persist-credentials", true)
 	config, remoteConfig := serverConfig(ghc.ServerURL, cmp.Or(c.Inputs["token"], ghc.Token), c.InsecureSkipTLS, co.submodules != "" && sshKey == "")
 	if boolInput(c.Inputs, "set-safe-directory", true) {
@@ -140,22 +145,21 @@ func Main(ctx context.Context, c *action.Context) (err error) {
 		if err := c.Container.Copy(runnerTemp, &container.FileEntry{Name: cert, Mode: 0o600, Body: string(certPEM)}, &container.FileEntry{Name: key, Mode: 0o600, Body: string(keyPEM)})(ctx); err != nil {
 			return err
 		}
-		scope := "http." + strings.TrimSuffix(ghc.ServerURL, "/") + "/."
-		remoteConfig = append(remoteConfig, scope+"sslCert="+path.Join(runnerTemp, cert), scope+"sslKey="+path.Join(runnerTemp, key))
+		remoteConfig = append(remoteConfig, git.ClientCertConfig("http."+strings.TrimSuffix(ghc.ServerURL, "/")+"/.", container.JoinPath(runnerTemp, cert), container.JoinPath(runnerTemp, key), executionOS)...)
 	}
 	env := gitEnv(c, remoteConfig)
 	env["GIT_LFS_SKIP_SMUDGE"] = strconv.FormatBool(!co.lfs || len(co.sparse) == 0) // lfs pull fetches the objects of a full checkout in one go
 	if sshKey != "" {
 		key := fmt.Sprintf("git-ssh-key-%x", digest[:8])
 		files := []*container.FileEntry{{Name: key, Mode: 0o600, Body: sshKey + "\n"}}
-		ssh := []string{"ssh", "-i", path.Join(runnerTemp, key)}
+		ssh := []string{"ssh", "-i", container.JoinPath(runnerTemp, key)}
 		if boolInput(c.Inputs, "ssh-strict", true) {
 			ssh = append(ssh, "-o", "StrictHostKeyChecking=yes", "-o", "CheckHostIP=no")
 		}
 		if knownHosts := strings.TrimSpace(c.Inputs["ssh-known-hosts"]); knownHosts != "" {
 			name := fmt.Sprintf("git-ssh-known-hosts-%x", digest[:8])
 			files = append(files, &container.FileEntry{Name: name, Mode: 0o600, Body: knownHosts + "\n"})
-			ssh = append(ssh, "-o", "UserKnownHostsFile=~/.ssh/known_hosts "+strconv.Quote(path.Join(runnerTemp, name)))
+			ssh = append(ssh, "-o", "UserKnownHostsFile=~/.ssh/known_hosts "+strconv.Quote(container.JoinPath(runnerTemp, name)))
 		}
 		if !persist {
 			defer func() {
@@ -218,7 +222,7 @@ func gitEnv(c *action.Context, config []string) map[string]string {
 	env := map[string]string{"GIT_TERMINAL_PROMPT": "0"}
 	maps.Copy(env, c.Env)
 	maps.DeleteFunc(env, func(name, _ string) bool { return slices.Contains(git.LocalEnvVars, name) })
-	maps.Copy(env, git.ConfigEnv(append([]string{"protocol.version=2", "init.defaultBranch=main", "advice.detachedHead=false", "maintenance.auto=false"}, config...)...))
+	maps.Copy(env, git.ConfigEnv(append([]string{"protocol.version=2", "init.defaultBranch=main", "advice.detachedHead=false", "maintenance.auto=false", "core.longpaths=true"}, config...)...))
 	return env
 }
 
@@ -301,7 +305,7 @@ type checkout struct {
 	filter, submodules                                     string
 	sparse                                                 []string
 	depth                                                  int
-	fetchTags, clean, lfs, progress, cone                  bool
+	fetchTags, clean, lfs, progress, cone, windows         bool
 }
 
 const fullDepth = "2147483647" // git's INFINITE_DEPTH, also deepens a shallow dst
@@ -314,6 +318,9 @@ func (co *checkout) commands() (commands [][]string, fetched int) {
 		repo("config", "remote.origin.url", co.url), // `remote add` fails on a repeated checkout
 		repo("config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"),
 		repo("config", "--replace-all", "--fixed-value", credentialsInclude, co.credentials, co.credentials),
+	}
+	if co.windows {
+		commands = append(commands, repo("config", "core.longpaths", "true")) // later steps run git on the checkout too
 	}
 	if co.lfs {
 		commands = append(commands, repo("lfs", "install", "--local"))
@@ -451,9 +458,13 @@ func boolInput(inputs map[string]string, name string, fallback bool) bool {
 	return strings.EqualFold(value, "true") || value == "" && fallback
 }
 
-func workspaceDestination(workspace, checkoutPath string) (string, error) {
-	cleanPath := path.Clean(strings.TrimSpace(checkoutPath))
-	if path.IsAbs(cleanPath) || cleanPath == ".." || strings.HasPrefix(cleanPath, "../") {
+func workspaceDestination(workspace, checkoutPath string, windows bool) (string, error) {
+	cleanPath := strings.TrimSpace(checkoutPath)
+	if windows {
+		cleanPath = strings.ReplaceAll(cleanPath, `\`, "/")
+	}
+	cleanPath = path.Clean(cleanPath)
+	if path.IsAbs(cleanPath) || cleanPath == ".." || strings.HasPrefix(cleanPath, "../") || windows && len(cleanPath) > 1 && cleanPath[1] == ':' {
 		return "", fmt.Errorf("checkout: path %q must be relative to the workspace", checkoutPath)
 	}
 	return path.Join(workspace, cleanPath), nil

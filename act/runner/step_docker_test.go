@@ -159,3 +159,33 @@ func TestStepDockerNewStepContainer(t *testing.T) {
 		})
 	}
 }
+
+func TestWindowsHostContainerActions(t *testing.T) {
+	for _, test := range []struct {
+		name, hostOS string
+		jobContainer container.ExecutionsEnvironment
+		wantError    bool
+	}{
+		{name: "Windows host", hostOS: "windows", jobContainer: &container.HostEnvironment{}, wantError: true},
+		{name: "Linux host", hostOS: "linux", jobContainer: &container.HostEnvironment{}},
+		{name: "macOS host", hostOS: "darwin", jobContainer: &container.HostEnvironment{}},
+		{name: "Windows with Linux job container", hostOS: "windows", jobContainer: &containerMock{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			original := hostOS
+			hostOS = test.hostOS
+			t.Cleanup(func() { hostOS = original })
+			rc := &RunContext{JobContainer: test.jobContainer, kubernetes: true}
+			wantError := errKubernetesDocker.Error()
+			if test.wantError {
+				wantError = errWindowsHostContainer.Error()
+			}
+			t.Run("docker step", func(t *testing.T) {
+				require.EqualError(t, (&stepDocker{RunContext: rc}).runUsesContainer()(t.Context()), wantError)
+			})
+			t.Run("container action", func(t *testing.T) {
+				require.EqualError(t, execAsDocker(t.Context(), &stepActionRemote{RunContext: rc}, "action", "", "", false, stepStageMain), wantError)
+			})
+		})
+	}
+}

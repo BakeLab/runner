@@ -11,9 +11,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Group is a job-scoped Windows Job Object holding every process the job's steps
-// start; closing it terminates whatever is still assigned, reaching orphans the
-// per-step Killer misses (a completed step's leftover has no parent to walk from).
+// Group holds tracked step processes in a job-scoped Windows Job Object.
 type Group struct {
 	mu  sync.Mutex
 	job windows.Handle

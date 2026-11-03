@@ -52,6 +52,9 @@ func (sd *stepDocker) runUsesContainer() common.Executor {
 	step := sd.Step
 
 	return func(ctx context.Context) error {
+		if rc.isWindowsHost() {
+			return errWindowsHostContainer
+		}
 		if rc.kubernetes {
 			return errKubernetesDocker
 		}

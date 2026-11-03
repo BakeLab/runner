@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"path"
 	"reflect"
 	"regexp"
 	"strings"
@@ -160,7 +159,7 @@ func getHashFilesFunction(ctx context.Context, rc *RunContext) func(v []reflect.
 				Name: name,
 				Mode: 0o644,
 				Body: hashfiles,
-			}).Then(rc.JobContainer.Exec([]string{"node", path.Join(rc.JobContainer.GetActPath(), name)}, env, "", ""))(timeoutCtx)
+			}).Then(rc.JobContainer.Exec([]string{"node", container.JoinPath(rc.JobContainer.GetActPath(), name)}, env, "", ""))(timeoutCtx)
 			quotedPatterns := expressionStringEscape(strings.Join(patterns, ", "))
 			switch {
 			case err == nil:

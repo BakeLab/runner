@@ -100,7 +100,7 @@ func printRunActionHeader(ctx context.Context, step *model.Step, action *model.A
 	maps.Copy(inputs, step.With)
 	if action != nil {
 		for name := range action.Inputs {
-			if _, provided := lookupFold(step.With, name, true); !provided {
+			if _, provided := common.LookupFold(step.With, name, true); !provided {
 				inputs[name] = env[inputEnvKey(name)]
 			}
 		}
@@ -292,7 +292,7 @@ func (sr *stepRun) setupShellCommand(ctx context.Context) (name, script string, 
 		name += ".sh"
 	case "pwsh", "powershell":
 		name += ".ps1"
-		runPrepend = "$ErrorActionPreference = 'stop'"
+		runPrepend = "$ErrorActionPreference = 'stop'\n$OutputEncoding = [System.Text.UTF8Encoding]::new($false)\ntry { [Console]::OutputEncoding = $OutputEncoding } catch {}"
 		runAppend = "if ((Test-Path -LiteralPath variable:/LASTEXITCODE)) { exit $LASTEXITCODE }"
 	case "cmd":
 		name += ".cmd"
@@ -302,6 +302,12 @@ func (sr *stepRun) setupShellCommand(ctx context.Context) (name, script string, 
 	}
 
 	script = fmt.Sprintf("%s\n%s\n%s", runPrepend, script, runAppend)
+	switch shellCommand {
+	case "powershell":
+		script = "\ufeff" + script
+	case "cmd":
+		script = strings.ReplaceAll(strings.ReplaceAll(script, "\r\n", "\n"), "\n", "\r\n")
+	}
 
 	if !strings.Contains(script, "::add-mask::") && !sr.RunContext.Config.InsecureSecrets {
 		logger.Debugf("Wrote command \n%s\n to '%s'", script, name)
@@ -311,7 +317,30 @@ func (sr *stepRun) setupShellCommand(ctx context.Context) (name, script string, 
 
 	rc := sr.getRunContext()
 	scriptPath := fmt.Sprintf("%s/%s", rc.JobContainer.GetActPath(), name)
+	if step.Shell == "pwsh" || step.Shell == "powershell" {
+		scriptPath = expressionStringEscape(scriptPath)
+	}
+	if step.Shell == "bash" || step.Shell == "sh" || step.Shell == "python" {
+		if rc.isWindowsHost() {
+			scriptPath = `"` + scriptPath + `"`
+		} else {
+			scriptPath = shellquote.Join(scriptPath)
+		}
+	}
 	sr.cmdline = strings.ReplaceAll(scCmd, `{0}`, scriptPath)
+	if rc.isWindowsHost() {
+		command := strings.TrimSpace(sr.cmdline)
+		if strings.HasPrefix(command, `"`) {
+			executable, _, closed := strings.Cut(command[1:], `"`)
+			if !closed || executable == "" {
+				return "", "", fmt.Errorf("invalid shell option %q: expected a double-quoted executable", step.Shell)
+			}
+			sr.cmd = []string{executable}
+		} else {
+			sr.cmd = strings.Fields(command)[:1]
+		}
+		return name, script, nil
+	}
 	sr.cmd, err = shellquote.Split(sr.cmdline)
 
 	return name, script, err

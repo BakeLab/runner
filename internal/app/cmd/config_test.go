@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"gitea.com/gitea/runner/internal/pkg/config"
@@ -38,7 +39,7 @@ func TestConfigCmdInitWritesTheMinimalConfig(t *testing.T) {
 
 	out, _, err := runConfigCmd(t, file, "init")
 	require.NoError(t, err)
-	assert.Contains(t, out, file)
+	assert.Equal(t, "wrote config file "+strconv.Quote(file)+"\n", out)
 	content, err := os.ReadFile(file)
 	require.NoError(t, err)
 	assert.Equal(t, config.Minimal, string(content))

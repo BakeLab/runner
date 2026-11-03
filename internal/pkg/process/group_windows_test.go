@@ -4,69 +4,25 @@
 package process
 
 import (
-	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
-// startOrphanMaker starts a process that spawns a detached, long-lived child and
-// exits, leaving the child parentless. Returns the cmd and the child's PID file.
-func startOrphanMaker(t *testing.T) (*exec.Cmd, string) {
-	t.Helper()
-
-	pidFile := filepath.Join(t.TempDir(), "child.pid")
-	script := fmt.Sprintf(
-		`$c = Start-Process powershell -PassThru -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 600'; `+
-			`Set-Content -LiteralPath %q -Value $c.Id`, pidFile)
-
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-Command", script)
-	require.NoError(t, cmd.Start())
-	t.Cleanup(func() { _ = cmd.Process.Kill() })
-
-	return cmd, pidFile
-}
-
-// awaitChildPID waits until the spawned child has reported its PID and is running.
-func awaitChildPID(t *testing.T, pidFile string) int {
-	t.Helper()
-
-	var childPID int
-	require.Eventually(t, func() bool {
-		b, err := os.ReadFile(pidFile)
-		if err != nil {
-			return false
-		}
-		s := strings.TrimSpace(string(b))
-		if s == "" {
-			return false
-		}
-		childPID, _ = strconv.Atoi(s)
-		return childPID > 0 && processAlive(childPID)
-	}, 20*time.Second, 200*time.Millisecond, "child process should start")
-
-	return childPID
-}
-
-// TestGroupClosePropagatesToOrphan covers what the per-step Killer cannot: a
-// completed step's orphan, reachable only by closing the job object.
 func TestGroupClosePropagatesToOrphan(t *testing.T) {
 	group, err := NewGroup()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = group.Close() })
 
-	cmd, pidFile := startOrphanMaker(t)
+	cmd, ready := newTestProcess(t, "orphan", false)
+	require.NoError(t, cmd.Start())
 	require.NoError(t, group.Assign(cmd.Process))
 
-	childPID := awaitChildPID(t, pidFile)
+	childPID := ready()
 
-	require.NoError(t, cmd.Wait()) // the step process exits cleanly, like a passing step
+	require.NoError(t, cmd.Wait())
 	require.Eventually(t, func() bool {
 		return !processAlive(cmd.Process.Pid)
 	}, 20*time.Second, 200*time.Millisecond, "the step process should have exited on its own")

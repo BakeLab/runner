@@ -327,8 +327,8 @@ health_check:
   # Minimum free space required on the filesystem holding runner workspaces.
   # Defaults to 1024 MiB when omitted or set to zero.
   #min_free_disk_space_mb: 1024
-  # Optional additional executable. A non-zero exit, timeout, or startup failure
-  # marks the runner unavailable.
+  # Optional additional executable, or a .bat or .cmd file on Windows. A non-zero
+  # exit, timeout, or startup failure marks the runner unavailable.
   #script: ''
   # How long a script result is cached and its maximum execution time.
   #interval: 30s

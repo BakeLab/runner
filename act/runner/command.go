@@ -165,7 +165,7 @@ func (rc *RunContext) refuseUnsecureCommand(ctx context.Context, command string)
 	}
 	caseInsensitive := rc.JobContainer != nil && rc.JobContainer.IsEnvironmentCaseInsensitive()
 	for _, env := range []map[string]string{rc.currentStepEnv(), rc.Env, rc.GlobalEnv} {
-		if value, ok := lookupFold(env, allowUnsecureCommandsVar, caseInsensitive); ok {
+		if value, ok := common.LookupFold(env, allowUnsecureCommandsVar, caseInsensitive); ok {
 			if isTruthyEnv(value) {
 				return false
 			}

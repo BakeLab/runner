@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,8 @@ import (
 	"github.com/docker/go-connections/nat"
 	"github.com/moby/moby/api/types/container"
 )
+
+var hostOS = runtime.GOOS // replaced in tests
 
 // ExitCodeError reports a non-zero process exit code from a container command.
 type ExitCodeError int

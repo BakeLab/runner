@@ -145,7 +145,7 @@ func TestDaemonRetriesDeclareOutagesAndRemovesOnlyConsumedEphemeralRegistration(
 		{"ephemeral stopped during declare outage", true, true, connect.NewError(connect.CodeUnavailable, "bad gateway"), nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			service := &daemonTestService{declareErr: tc.declareErr, fetchErr: tc.fetchErr, beforeTask: tc.beforeTask, cancel: cancel}
 			rpcServer := connect.NewServer()

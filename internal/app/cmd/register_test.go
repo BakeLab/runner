@@ -183,6 +183,9 @@ func TestRegisterInputsAssignToNext(t *testing.T) {
 
 func TestInitInputs(t *testing.T) {
 	t.Setenv(registerTokenEnvVar, "")
+	missingTokenFile := filepath.Join(t.TempDir(), "missing-token")
+	_, readErr := os.ReadFile(missingTokenFile)
+	require.ErrorIs(t, readErr, os.ErrNotExist)
 	for _, tc := range []struct {
 		name, tokenFile, wantErr string
 		env                      *string
@@ -190,8 +193,8 @@ func TestInitInputs(t *testing.T) {
 		{name: "missing token", wantErr: "missing token, token-file argument, or GITEA_RUNNER_REGISTRATION_TOKEN environment variable"},
 		{name: "empty token", env: new(""), wantErr: "missing token, token-file argument, or GITEA_RUNNER_REGISTRATION_TOKEN environment variable"},
 		{
-			name: "invalid token file", tokenFile: "/tmp/nonexistent", env: new("from-env"),
-			wantErr: "cannot read the token file: /tmp/nonexistent, open /tmp/nonexistent: no such file or directory",
+			name: "invalid token file", tokenFile: missingTokenFile, env: new("from-env"),
+			wantErr: "cannot read the token file: " + missingTokenFile + ", " + readErr.Error(),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

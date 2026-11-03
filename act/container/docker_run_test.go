@@ -27,10 +27,12 @@ import (
 	"gitea.com/gitea/runner/act/common/logging/logtest"
 
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/kballard/go-shellquote"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/system"
 	mobyclient "github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -65,6 +67,14 @@ func TestDockerEnvironmentUsesContainerPath(t *testing.T) {
 type mockDockerClient struct {
 	mobyclient.APIClient
 	mock.Mock
+	info      system.Info
+	infoErr   error
+	infoCalls int
+}
+
+func (m *mockDockerClient) Info(_ctx context.Context, _opts mobyclient.InfoOptions) (mobyclient.SystemInfoResult, error) {
+	m.infoCalls++
+	return mobyclient.SystemInfoResult{Info: m.info}, m.infoErr
 }
 
 func (m *mockDockerClient) ServerVersion(ctx context.Context, opts mobyclient.ServerVersionOptions) (mobyclient.ServerVersionResult, error) {
@@ -689,11 +699,11 @@ func TestMergeContainerConfigsDropsVolumeDriversFromWorkflows(t *testing.T) {
 }
 
 func TestMergeContainerConfigsKeepsTheRunnersFilesAndEnvToItself(t *testing.T) {
-	hostFile := filepath.Join(t.TempDir(), "host.env")
+	hostFile := filepath.Join(t.TempDir(), "host file.env")
 	require.NoError(t, os.WriteFile(hostFile, []byte("STOLEN=from-the-host\n"), 0o600))
 	t.Setenv("RUNNER_SECRET", "s3cr3t")
 
-	for _, option := range []string{"--env-file " + hostFile, "--label-file " + hostFile} {
+	for _, option := range []string{shellquote.Join("--env-file", hostFile), shellquote.Join("--label-file", hostFile)} {
 		logger := logging.New(logtest.New())
 		cr := &containerReference{input: &NewContainerInput{NetworkMode: "bridge", WorkflowOptions: option}}
 
@@ -933,6 +943,7 @@ func TestContainerInfoFromInspect(t *testing.T) {
 			"/etc/hosts":                "",
 			"/etc/hostname":             "",
 		}, info.Mounts)
+		assert.Equal(t, "/var/lib/docker/volumes/job/_data/subdir", info.DaemonPath("/workspace/owner/repo/subdir"))
 	})
 }
 
@@ -998,6 +1009,39 @@ func TestDockerCreateKeepsInputEntrypoint(t *testing.T) {
 	}
 }
 
+func TestDockerCreateNetworkAliases(t *testing.T) {
+	for _, test := range []struct {
+		networkMode string
+		wantAliases bool
+	}{
+		{"job-network", true},
+		{"host", false},
+		{"bridge", false},
+		{"default", false},
+		{"none", false},
+		{"container:x", false},
+	} {
+		t.Run(test.networkMode, func(t *testing.T) {
+			cr := &containerReference{
+				input: &NewContainerInput{NetworkMode: test.networkMode, NetworkAliases: []string{"service"}},
+				cli: &probeClient{create: func(_ctx context.Context, opts mobyclient.ContainerCreateOptions) (mobyclient.ContainerCreateResult, error) {
+					assert.Equal(t, container.NetworkMode(test.networkMode), opts.HostConfig.NetworkMode)
+					if test.wantAliases {
+						assert.Equal(t, &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
+							"job-network": {Aliases: []string{"service"}},
+						}}, opts.NetworkingConfig)
+					} else {
+						assert.Nil(t, opts.NetworkingConfig)
+					}
+					return mobyclient.ContainerCreateResult{ID: "created"}, nil
+				}},
+			}
+			require.NoError(t, cr.create(nil, nil)(t.Context()))
+			assert.Equal(t, "created", cr.id)
+		})
+	}
+}
+
 func TestMergeContainerConfigsKeepsNetworkAliasesFromOptions(t *testing.T) {
 	logger := logging.New(logtest.New())
 	cr := &containerReference{input: &NewContainerInput{
@@ -1018,4 +1062,93 @@ func TestSupportsContainerImagePlatformDaemonError(t *testing.T) {
 	supported, err := supportsContainerImagePlatform(t.Context(), cli)
 	require.ErrorContains(t, err, "cannot connect to the Docker daemon")
 	assert.False(t, supported)
+}
+
+func TestContainerOptionsUseDaemonOS(t *testing.T) {
+	for _, testcase := range []struct {
+		name     string
+		serverOS string
+		infoErr  error
+		device   string
+		expected container.DeviceMapping
+	}{
+		{name: "Linux daemon", serverOS: "linux", device: "/dev/kvm:/dev/kvm:rwm", expected: container.DeviceMapping{PathOnHost: "/dev/kvm", PathInContainer: "/dev/kvm", CgroupPermissions: "rwm"}},
+		{name: "unknown daemon", device: "/dev/kvm:/dev/kvm:rwm", expected: container.DeviceMapping{PathOnHost: "/dev/kvm", PathInContainer: "/dev/kvm", CgroupPermissions: "rwm"}},
+		{name: "unavailable daemon info", infoErr: errors.New("unavailable"), device: "/dev/kvm:/dev/kvm:rwm", expected: container.DeviceMapping{PathOnHost: "/dev/kvm", PathInContainer: "/dev/kvm", CgroupPermissions: "rwm"}},
+		{name: "Windows daemon", serverOS: "windows", device: "class/01234567-89ab-cdef-0123-456789abcdef", expected: container.DeviceMapping{PathOnHost: "class/01234567-89ab-cdef-0123-456789abcdef"}},
+	} {
+		t.Run(testcase.name, func(t *testing.T) {
+			cli := &mockDockerClient{info: system.Info{OSType: testcase.serverOS}, infoErr: testcase.infoErr}
+			cr := &containerReference{cli: cli, input: &NewContainerInput{RunnerOptions: "--device=" + testcase.device, WorkflowOptions: "--device=" + testcase.device, NetworkMode: "bridge"}}
+			for range 2 {
+				hostConfig := &container.HostConfig{}
+				require.NoError(t, cr.mergeContainerConfigs(t.Context(), &container.Config{}, hostConfig))
+				assert.Equal(t, []container.DeviceMapping{testcase.expected}, hostConfig.Devices)
+			}
+			assert.Equal(t, 1, cli.infoCalls)
+		})
+	}
+}
+
+func TestConnectTakesDaemonOSFromPing(t *testing.T) {
+	var infos atomic.Int32
+	daemon := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("API-Version", "1.47")
+		writer.Header().Set("OSType", "windows")
+		if strings.HasSuffix(request.URL.Path, "/info") {
+			infos.Add(1)
+		}
+	}))
+	t.Cleanup(daemon.Close)
+	t.Setenv("DOCKER_HOST", daemon.URL)
+	cr := &containerReference{input: &NewContainerInput{}}
+	require.NoError(t, cr.connect()(t.Context()))
+	assert.Equal(t, "windows", cr.targetOS(t.Context()))
+	assert.Zero(t, infos.Load())
+}
+
+func TestContainerCopyModes(t *testing.T) {
+	for _, testcase := range []struct {
+		hostOS, serverOS string
+		expected         int64
+	}{
+		{"windows", "linux", 0o755},
+		{"windows", "windows", 0o666},
+		{"linux", "linux", 0o666},
+	} {
+		t.Run(testcase.hostOS+"-"+testcase.serverOS, func(t *testing.T) {
+			source := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(source, "run.sh"), []byte("#!/bin/sh\n"), 0o666))
+			require.NoError(t, os.Chmod(filepath.Join(source, "run.sh"), 0o666))
+			file := &FileEntry{Name: "run.sh", Mode: 0o600, Body: "#!/bin/sh\n"}
+			original := hostOS
+			hostOS = testcase.hostOS
+			t.Cleanup(func() { hostOS = original })
+			cli := &mockDockerClient{info: system.Info{OSType: testcase.serverOS}}
+			var modes []int64
+			cli.On("CopyToContainer", mock.Anything, "job", mock.Anything).
+				Run(func(args mock.Arguments) {
+					reader := tar.NewReader(args.Get(2).(mobyclient.CopyToContainerOptions).Content)
+					header, err := reader.Next()
+					require.NoError(t, err)
+					modes = append(modes, header.Mode)
+					assert.Equal(t, "run.sh", filepath.Base(header.Name))
+					content, err := io.ReadAll(reader)
+					require.NoError(t, err)
+					assert.Equal(t, file.Body, string(content))
+					_, err = reader.Next()
+					require.ErrorIs(t, err, io.EOF)
+				}).Return(mobyclient.CopyToContainerResult{}, nil).Twice()
+			cr := &containerReference{cli: cli, id: "job", input: &NewContainerInput{}}
+			require.NoError(t, cr.copyContent("/workspace", file)(t.Context()))
+			require.NoError(t, cr.copyDir("/workspace", source+string(filepath.Separator), false, true)(t.Context()))
+			assert.Equal(t, []int64{0o600, testcase.expected}, modes)
+			if testcase.hostOS == "windows" {
+				assert.Equal(t, 1, cli.infoCalls)
+			} else {
+				assert.Zero(t, cli.infoCalls)
+			}
+			cli.AssertExpectations(t)
+		})
+	}
 }

@@ -2,6 +2,8 @@
 
 ## Installation
 
+The runner runs on Linux, macOS and Windows.
+
 ### Prerequisites
 
 On the runner:
@@ -87,6 +89,23 @@ If the registry succeed, it will run immediately. Next time, you could run the r
 
 ```bash
 ./gitea-runner daemon
+```
+
+### Windows service
+
+Register the runner first, keeping `gitea-runner.exe`, `config.yaml` and the `.runner` registration file in the same directory. From an elevated Command Prompt, install and start the service with absolute paths:
+
+```bat
+sc.exe create gitea-runner binPath= "\"C:\gitea-runner\gitea-runner.exe\" daemon --config \"C:\gitea-runner\config.yaml\"" start= auto
+sc.exe start gitea-runner
+```
+
+The service runs from the executable's directory and appends its logs to `gitea-runner.log` there. Its account needs write access to that directory and access to the tools used by jobs. Use `sc.exe stop gitea-runner` to stop it, allowing running jobs to finish according to `runner.shutdown_timeout`.
+
+On shutdown or reboot, Windows waits for the service's preshutdown timeout at most, so set it above `runner.shutdown_timeout`, here six minutes for `5m`. It takes effect after the next reboot:
+
+```bat
+reg.exe add HKLM\SYSTEM\CurrentControlSet\Services\gitea-runner /v PreshutdownTimeout /t REG_DWORD /d 360000 /f
 ```
 
 ### Run with docker
@@ -233,7 +252,9 @@ The `daemon` command also accepts `--labels` (which defaults to the `GITEA_RUNNE
 
 Whenever the resulting labels differ from the ones in the registration file, they are written back to it and re-declared to the Gitea instance on startup.
 
-> **Note:** A runner that only exposes `host` labels still needs access to a Docker daemon (e.g. a mounted `/var/run/docker.sock`) whenever a job uses a `docker://` action or a service container. `host` labels only change where the job's own steps run; container-based steps and actions are still executed with Docker.
+> **Note:** A runner that only exposes `host` labels still needs access to a Docker daemon (e.g. a mounted `/var/run/docker.sock`) whenever a job uses a `docker://` action or a service container. `host` labels only change where the job's own steps run; container-based steps and actions are still executed with Docker. Windows hosts do not support container actions and `docker://` steps in host jobs, like GitHub's Windows runners.
+
+On Windows hosts, a step's background processes end with the job unless it opts out, see [host-mode background processes](docs/host-mode.md).
 
 #### Service containers
 

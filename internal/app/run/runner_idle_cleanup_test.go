@@ -241,9 +241,6 @@ func TestRunnerShouldRunIdleCleanupSkipsWhenDisabled(t *testing.T) {
 	})
 }
 
-// TestRunnerOnIdleIntegratesCleanup wires the full OnIdle entry point and
-// confirms it walks workdir_parent (after the leading-slash trim that
-// matches the production path construction) and removes stale numeric dirs.
 func TestRunnerOnIdleIntegratesCleanup(t *testing.T) {
 	now := time.Date(2026, time.April, 29, 20, 0, 0, 0, time.UTC)
 	root := t.TempDir()
@@ -255,7 +252,7 @@ func TestRunnerOnIdleIntegratesCleanup(t *testing.T) {
 		cfg: &config.Config{
 			Container: config.Container{
 				BindWorkdir:   true,
-				WorkdirParent: root, // leading slash absent, OnIdle reattaches it
+				WorkdirParent: root,
 			},
 			Runner: config.Runner{
 				WorkdirCleanupAge:   24 * time.Hour,
@@ -370,4 +367,17 @@ func TestRunnerOnIdleRemovesOrphanNetworks(t *testing.T) {
 	assert.Equal(t, []string{"runner-1", "runner-2"}, sweptVolumes)
 	assert.Equal(t, []string{"a1b2c3d4e5f6", ""}, detached)
 	assert.Equal(t, []string{"runner-1"}, sweptPods)
+}
+
+func TestContainerWorkdirRoot(t *testing.T) {
+	absolute := t.TempDir()
+	rooted := filepath.Join(string(filepath.Separator), "workspace")
+	for input, want := range map[string]string{
+		"workspace":          rooted,
+		"/workspace/":        rooted,
+		absolute:             absolute,
+		absolute + "/nested": filepath.Join(absolute, "nested"),
+	} {
+		assert.Equal(t, want, containerWorkdirRoot(input), input)
+	}
 }

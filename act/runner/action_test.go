@@ -115,7 +115,7 @@ runs:
 					"cwd": {
 						Description: "(Actual working directory)",
 						Required:    false,
-						Default:     "actionDir/actionPath",
+						Default:     filepath.Join("actionDir", "actionPath"),
 					},
 					"command": {
 						Description: "(Actual program)",
@@ -144,7 +144,7 @@ runs:
 			}
 
 			writeFile := func(filename string, _data []byte, perm fs.FileMode) error {
-				assert.Equal(t, "actionDir/actionPath/trampoline.js", filename)
+				assert.Equal(t, filepath.Join("actionDir", "actionPath", "trampoline.js"), filename)
 				assert.Equal(t, fs.FileMode(0o644), perm)
 				return nil
 			}
@@ -242,6 +242,39 @@ func TestActionRunner(t *testing.T) {
 				rawOutput, ok := hook.LastRecord().Attr(rawOutputField)
 				require.True(t, ok)
 				assert.Equal(t, true, rawOutput)
+			}
+			cm.AssertExpectations(t)
+		})
+	}
+}
+
+func TestGoActionUsesLinuxExecutablePaths(t *testing.T) {
+	for _, stage := range []string{"main", "pre", "post"} {
+		t.Run(stage, func(t *testing.T) {
+			cm := &containerMock{}
+			containerActionDir := "/var/run/act/actions/" + model.UsesHash("/org/repo@ref")
+			cm.On("CopyDir", containerActionDir+"/", mock.Anything, false, true).Return(noopExecutor).Maybe()
+			cm.On("Exec", []string{"go", "build", "-o", stage + ".go.out", stage + ".go"}, mock.Anything, "", containerActionDir).Return(noopExecutor).Once()
+			cm.On("Exec", []string{containerActionDir + "/" + stage + ".go.out"}, mock.Anything, "", "").Return(noopExecutor).Once()
+			step := &stepActionRemote{
+				Step: &model.Step{ID: "step", Uses: "org/repo@ref"},
+				RunContext: &RunContext{
+					Config:       &Config{NoActionPatch: true, PresetGitHubContext: &model.GithubContext{}},
+					Run:          &model.Run{JobID: "job", Workflow: &model.Workflow{Jobs: map[string]*model.Job{"job": {}}}},
+					JobContainer: cm,
+				},
+				action:       &model.Action{Runs: model.ActionRuns{Using: model.ActionRunsUsingGo, Main: "main.go", Pre: "pre.go", Post: "post.go"}},
+				actionDir:    t.TempDir(),
+				env:          map[string]string{},
+				remoteAction: mustNewRemoteAction(t, "org/repo@ref"),
+			}
+			switch stage {
+			case "main":
+				require.NoError(t, runActionImpl(step, step.actionDir, step.remoteAction)(t.Context()))
+			case "pre":
+				require.NoError(t, runPreStep(step)(t.Context()))
+			case "post":
+				require.NoError(t, runPostStep(step)(t.Context()))
 			}
 			cm.AssertExpectations(t)
 		})

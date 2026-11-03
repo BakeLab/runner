@@ -246,9 +246,10 @@ func TestHookCommand(t *testing.T) {
 		cmd   []string
 		shell string
 	}{
-		"/hooks/started.sh":  {[]string{"bash", "-e", "/hooks/started.sh"}, "bash -e {0}"},
-		"/hooks/started.PS1": {[]string{"pwsh", "-command", ". '/hooks/started.PS1'"}, `pwsh -command ". '{0}'"`},
-		"/hooks/started":     {[]string{"/hooks/started"}, ""},
+		"/hooks/started.sh":            {[]string{"bash", "-e", "/hooks/started.sh"}, "bash -e {0}"},
+		"/hooks/started.PS1":           {[]string{"pwsh", "-command", ". '/hooks/started.PS1'"}, `pwsh -command ". '{0}'"`},
+		"/hooks/started":               {[]string{"/hooks/started"}, ""},
+		`C:\hooks\O'Brien\started.ps1`: {[]string{"pwsh", "-command", `. 'C:\hooks\O''Brien\started.ps1'`}, `pwsh -command ". '{0}'"`},
 	} {
 		cmd, shell := hookCommand(hookPath)
 		assert.Equal(t, want.cmd, cmd, hookPath)

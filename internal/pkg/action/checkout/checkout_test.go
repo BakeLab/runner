@@ -13,9 +13,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -50,6 +52,7 @@ func gitLog(dir string) []string {
 
 func TestCheckout(t *testing.T) {
 	server := t.TempDir()
+	serverURL := (&url.URL{Scheme: "file", Path: "/" + strings.TrimPrefix(filepath.ToSlash(server), "/")}).String()
 	var sha string
 	_, lfsErr := exec.LookPath("git-lfs")
 	require.True(t, t.Run("fixtures", func(t *testing.T) {
@@ -192,13 +195,16 @@ exec sh -c "$(printf '%s' "$last" | sed "s#git-upload-pack '/\(.*\)\.git'#git up
 			if tc.inputs["lfs"] == "true" && lfsErr != nil {
 				t.Skip("needs git-lfs")
 			}
+			if tc.inputs["ssh-key"] != "" && runtime.GOOS == "windows" {
+				t.Skip("Git for Windows puts its own ssh ahead of the fake one on PATH")
+			}
 			workspace, runnerTemp := t.TempDir(), t.TempDir()
 			output := filepath.Join(runnerTemp, "output")
 			checkout := func(inputs map[string]string) error {
 				return Main(t.Context(), &action.Context{
 					Container: &container.HostEnvironment{Path: workspace, TmpDir: runnerTemp, StdOut: io.Discard},
 					Github: &model.GithubContext{
-						Repository: "org/repo", Ref: cmp.Or(tc.eventRef, "refs/heads/main"), Sha: sha, ServerURL: "file://" + server, Token: "tok", Event: tc.event,
+						Repository: "org/repo", Ref: cmp.Or(tc.eventRef, "refs/heads/main"), Sha: sha, ServerURL: serverURL, Token: "tok", Event: tc.event,
 					},
 					Inputs:         inputs,
 					HostWorkdir:    host,
@@ -207,7 +213,7 @@ exec sh -c "$(printf '%s' "$last" | sed "s#git-upload-pack '/\(.*\)\.git'#git up
 					NoSkipCheckout: tc.noSkip,
 					Env: map[string]string{
 						"PATH": tools + string(os.PathListSeparator) + os.Getenv("PATH"), "GIT_CONFIG_GLOBAL": globalConfig, "GIT_CONFIG_NOSYSTEM": "1",
-						"GIT_DIR": host, "GITHUB_OUTPUT": output, "SSH_SERVER": server, "SSH_ARGS": filepath.Join(runnerTemp, "ssh-args"),
+						"GIT_DIR": host, "GITHUB_OUTPUT": output, "SSH_SERVER": filepath.ToSlash(server), "SSH_ARGS": filepath.Join(runnerTemp, "ssh-args"),
 					},
 				})
 			}
@@ -270,7 +276,7 @@ exec sh -c "$(printf '%s' "$last" | sed "s#git-upload-pack '/\(.*\)\.git'#git up
 			for _, repo := range repos {
 				assert.Equal(t, tc.inputs["clean"] == "false", fileExists(filepath.Join(repo, "untracked")), repo)
 				assert.Len(t, strings.Fields(gitOutput(repo, "config", "--local", "--get-all", credentialsInclude)), 1, repo)
-				headers, _ := exec.Command("git", "-C", repo, "config", "--get-all", "http.file://"+server+"/.extraheader").Output()
+				headers, _ := exec.Command("git", "-C", repo, "config", "--get-all", "http."+serverURL+"/.extraheader").Output()
 				assert.Equal(t, persisted, string(headers) == "\nAuthorization: Basic dG9rZW46dG9r\n", repo)
 			}
 			if tc.inputs["ssh-key"] != "" {
@@ -353,4 +359,26 @@ func gitOutput(dir string, args ...string) string {
 func fileExists(name string) bool {
 	_, err := os.Stat(name)
 	return err == nil
+}
+
+func TestWorkspaceDestination(t *testing.T) {
+	for _, tc := range []struct {
+		path    string
+		windows bool
+		want    string
+	}{
+		{`..\x`, true, ""},
+		{`C:x`, true, ""},
+		{`a\b`, true, "/w/a/b"},
+		{`..\x`, false, `/w/..\x`},
+		{`a:b`, false, "/w/a:b"},
+	} {
+		got, err := workspaceDestination("/w", tc.path, tc.windows)
+		if tc.want == "" {
+			assert.ErrorContains(t, err, "must be relative", tc.path)
+		} else {
+			require.NoError(t, err, tc.path)
+			assert.Equal(t, tc.want, got, tc.path)
+		}
+	}
 }

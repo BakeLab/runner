@@ -54,6 +54,22 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+func TestClientCertConfig(t *testing.T) {
+	for _, testcase := range []struct {
+		prefix, certFile, executionOS string
+		expected                      []string
+	}{
+		{"http.", "cert.pem", "windows", []string{"http.sslCert=cert.pem", "http.sslKey=key.pem", "http.sslBackend=openssl"}},
+		{"http.https://example.com/.", "cert.pem", "Windows", []string{"http.https://example.com/.sslCert=cert.pem", "http.https://example.com/.sslKey=key.pem", "http.https://example.com/.sslBackend=openssl"}},
+		{"http.", "cert.pem", "Linux", []string{"http.sslCert=cert.pem", "http.sslKey=key.pem"}},
+		{"http.", "", "Windows", nil},
+	} {
+		t.Run(testcase.prefix+testcase.certFile+testcase.executionOS, func(t *testing.T) {
+			assert.Equal(t, testcase.expected, ClientCertConfig(testcase.prefix, testcase.certFile, "key.pem", testcase.executionOS))
+		})
+	}
+}
+
 func TestFindGitSlug(t *testing.T) {
 	for _, testcase := range []struct {
 		remoteURL string
@@ -185,7 +201,8 @@ func TestGitFindRef(t *testing.T) {
 func TestGitCloneExecutor(t *testing.T) {
 	remoteDir, workDir := newGitRemote(t)
 	require.NoError(t, os.WriteFile(filepath.Join(workDir, "action.sh"), []byte("#!/bin/sh\necho hi\n"), 0o755))
-	require.NoError(t, gitCmd("-C", workDir, "add", "action.sh"))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, ".gitattributes"), []byte("*.sh text\n"), 0o644))
+	require.NoError(t, gitCmd("-C", workDir, "add", "action.sh", ".gitattributes"))
 	require.NoError(t, gitCmd("-C", workDir, "commit", "-m", "initial"))
 	require.NoError(t, gitCmd("-C", workDir, "tag", "v2"))
 	require.NoError(t, gitCmd("-C", workDir, "push", "-u", "origin", "main"))
@@ -200,7 +217,7 @@ func TestGitCloneExecutor(t *testing.T) {
 	require.NoError(t, gitCmd("-C", workDir, "push", "origin", "main:refs/heads/"+fullSha[:4]))
 
 	hostConfig := filepath.Join(t.TempDir(), "gitconfig")
-	require.NoError(t, os.WriteFile(hostConfig, []byte("[core]\n\tautocrlf = true\n[url \""+remoteDir+"\"]\n\tinsteadOf = https://example.invalid/action\n"), 0o644))
+	require.NoError(t, os.WriteFile(hostConfig, []byte("[core]\n\tautocrlf = true\n\teol = crlf\n[url "+strconv.Quote(remoteDir)+"]\n\tinsteadOf = https://example.invalid/action\n"), 0o644))
 	t.Setenv("GIT_CONFIG_GLOBAL", hostConfig)
 	t.Setenv("GIT_DIR", t.TempDir())
 
@@ -676,8 +693,8 @@ func TestNewGitCloneExecutorFetchSendsTokenAndHonoursContext(t *testing.T) {
 
 	select {
 	case <-reached:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the executor never reached the remote")
+	case err := <-done:
+		t.Fatalf("the executor finished before reaching the remote: %v", err)
 	}
 	assert.Equal(t, "Basic "+base64.StdEncoding.EncodeToString([]byte("token:secret")), authorization)
 	cancel()
