@@ -18,10 +18,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDockerBuildReportsDaemonError(t *testing.T) {
+func TestDockerBuildLabelsImageWithItsTagAndReportsDaemonError(t *testing.T) {
+	var labels string
 	daemon := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("API-Version", "1.47")
 		if strings.HasSuffix(request.URL.Path, "/build") {
+			labels = request.URL.Query().Get("labels")
 			writer.Header().Set("Content-Type", "application/json")
 			writer.WriteHeader(http.StatusInternalServerError)
 			_, _ = io.WriteString(writer, `{"message":"build rejected"}`)
@@ -35,6 +37,7 @@ func TestDockerBuildReportsDaemonError(t *testing.T) {
 	require.ErrorContains(t, NewDockerBuildExecutor(NewDockerBuildExecutorInput{
 		ImageTag: "action:test", Dockerfile: "Dockerfile", BuildContext: strings.NewReader(""),
 	})(t.Context()), "build rejected")
+	require.JSONEq(t, `{"com.gitea.runner.image":"action:test"}`, labels)
 }
 
 func TestCreateBuildContextFollowsDockerignoreAndSymlinkedRootButKeepsDockerfile(t *testing.T) {

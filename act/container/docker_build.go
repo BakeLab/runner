@@ -48,6 +48,7 @@ func NewDockerBuildExecutor(input NewDockerBuildExecutorInput) common.Executor {
 
 		options := client.ImageBuildOptions{
 			Tags:        []string{input.ImageTag},
+			Labels:      map[string]string{"com.gitea.runner.image": input.ImageTag}, // own image ID per tag, so removing one never deletes another job's identical build
 			Remove:      true,
 			AuthConfigs: LoadDockerAuthConfigs(ctx),
 			Dockerfile:  input.Dockerfile,
