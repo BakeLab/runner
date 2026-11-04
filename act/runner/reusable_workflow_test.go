@@ -82,7 +82,7 @@ func TestReusableWorkflowCachedBranchRefRefreshes(t *testing.T) {
 
 func TestNewReusableWorkflowExecutorHoldsCloneLock(t *testing.T) {
 	workflowDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(workflowDir, "reusable.yml"), []byte(":"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workflowDir, "reusable.yml"), []byte("["), 0o644))
 
 	unlock, err := git.AcquireCloneLock(t.Context(), workflowDir)
 	require.NoError(t, err)
@@ -118,7 +118,7 @@ func TestNewLocalReusableWorkflowExecutorFindsSameRepositoryPaths(t *testing.T) 
 	workdir := filepath.Join(t.TempDir(), "workspace")
 	require.NoError(t, os.MkdirAll(filepath.Join(workdir, ".gitea", "workflows"), 0o755))
 	require.NoError(t, os.Mkdir(workdir+".lock", 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workdir, ".gitea", "workflows", "reusable.yml"), []byte(":"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workdir, ".gitea", "workflows", "reusable.yml"), []byte("["), 0o644))
 
 	for _, uses := range []string{"./.gitea/workflows/reusable.yml", "$/.gitea/workflows/reusable.yml"} {
 		rc := &RunContext{
