@@ -4,6 +4,7 @@ $shared = '\\host.lan\Data'
 try {
     Write-Output '==> Setting up Windows'
     Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem LongPathsEnabled 1
+    Set-TimeZone -Id UTC # QEMU's clock is UTC, any other zone boots the cached install hours off and jumps when time syncs
     foreach ($tool in @(
             @('git.7z.exe', 'https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.3/PortableGit-2.56.0.3-64-bit.7z.exe', '4fc27b779829a36df77911e3f4dea09c66c790dd6c5f7dfa3b6a5479f1fe354f'),
             @('node.zip', 'https://nodejs.org/dist/v24.22.1/node-v24.22.1-win-x64.zip', 'd2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5'),

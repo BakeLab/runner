@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -132,6 +133,31 @@ func TestExecutorConditionalsAndFinally(t *testing.T) {
 	require.NoError(t, record("main").Finally(record("finally"))(ctx))
 
 	assert.Equal(t, []string{"if-true", "if-not", "if-bool", "main", "finally"}, calls)
+}
+
+func TestExecutorRetryStopsOnSuccessOrAfterAllAttempts(t *testing.T) {
+	backoff := RetryBackoff
+	RetryBackoff = func() time.Duration { return 0 }
+	t.Cleanup(func() { RetryBackoff = backoff })
+	transient := errors.New("transient")
+	for _, tc := range []struct {
+		failures, calls int
+		err             error
+	}{
+		{failures: 2, calls: 3},
+		{failures: 5, calls: 3, err: transient},
+	} {
+		var calls int
+		err := Executor(func(context.Context) error {
+			calls++
+			if calls <= tc.failures {
+				return transient
+			}
+			return nil
+		}).Retry(3)(t.Context())
+		require.Equal(t, tc.err, err)
+		require.Equal(t, tc.calls, calls)
+	}
 }
 
 func TestExecutorFinallyReturnsFinallyErrorWithOriginal(t *testing.T) {

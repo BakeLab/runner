@@ -39,6 +39,8 @@ linters:
           deny:
             - pkg: golang.org/x/exp
               desc: it's experimental and unreliable
+            - pkg: unsafe
+              desc: use typed APIs instead
         logging:
           files:
             - $all

@@ -5,6 +5,7 @@ package process
 
 import (
 	"os"
+	"sync"
 
 	"golang.org/x/sys/windows"
 )
@@ -23,6 +24,7 @@ import (
 // on cancellation (TerminateJobObject), which also closes the inherited pipe
 // handles so cmd.Wait() can return.
 type Killer struct {
+	mu  sync.Mutex
 	job windows.Handle
 }
 
@@ -55,7 +57,12 @@ func NewKiller(p *os.Process) (*Killer, error) {
 // Kill terminates every process currently assigned to the job (the process and
 // all of its descendants).
 func (k *Killer) Kill() error {
-	if k == nil || k.job == 0 {
+	if k == nil {
+		return nil
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.job == 0 {
 		return nil
 	}
 	return windows.TerminateJobObject(k.job, 1)
@@ -63,7 +70,12 @@ func (k *Killer) Kill() error {
 
 // Close releases the job handle. It does not terminate the processes.
 func (k *Killer) Close() error {
-	if k == nil || k.job == 0 {
+	if k == nil {
+		return nil
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.job == 0 {
 		return nil
 	}
 	h := k.job

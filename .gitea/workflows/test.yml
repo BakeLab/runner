@@ -65,10 +65,13 @@ jobs:
       - uses: ./.gitea/actions/go-setup
       - name: prepare anonymous docker config
         run: mkdir -p "$DOCKER_CONFIG" && echo '{}' > "$DOCKER_CONFIG/config.json"
+      - name: windows vm cache key
+        id: windows-vm
+        run: echo "key=windows-vm-$(grep '^WINDOWS_TEST_IMAGE' Makefile | cat - scripts/test-windows.sh scripts/test-windows-setup.ps1 | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/windows-vm
-          key: windows-vm
+          key: ${{ steps.windows-vm.outputs.key }}
       - name: test on windows
         id: test-windows
         run: WINDOWS_TEST_CACHE="$HOME/.cache/windows-vm" make test-windows
@@ -78,7 +81,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/windows-vm
-          key: windows-vm
+          key: ${{ steps.windows-vm.outputs.key }}
 
   e2e:
     name: gitea compatibility (${{ matrix.gitea_image }})

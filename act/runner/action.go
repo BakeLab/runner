@@ -339,34 +339,30 @@ func execAsDocker(ctx context.Context, step actionStep, actionName, actionDir, b
 
 		if !correctArchExists || rc.Config.ForceRebuild {
 			logger.Debugf("image '%s' for architecture '%s' will be built from context '%s", image, rc.Config.ContainerArchitecture, contextDir)
-			var buildContext io.ReadCloser
-			if localAction {
-				buildContext, err = rc.JobContainer.GetContainerArchive(ctx, contextDir+"/.")
-				if err != nil {
-					return err
+			prepImage = common.Executor(func(ctx context.Context) error {
+				input := container.NewDockerBuildExecutorInput{
+					ContextDir: contextDir,
+					Dockerfile: fileName,
+					ImageTag:   image,
+					Platform:   rc.Config.ContainerArchitecture,
+					BuildArgs:  rc.proxyBuildArgs(),
 				}
-				defer buildContext.Close()
-			}
-			prepImage = ContainerNewDockerBuildExecutor(container.NewDockerBuildExecutorInput{
-				ContextDir:   contextDir,
-				Dockerfile:   fileName,
-				ImageTag:     image,
-				BuildContext: buildContext,
-				Platform:     rc.Config.ContainerArchitecture,
-				BuildArgs:    rc.proxyBuildArgs(),
-			})
-			if buildContext == nil {
-				// Held across the whole build: the daemon drains contextDir lazily.
-				inner := prepImage
-				prepImage = func(ctx context.Context) error {
-					unlock, err := git.AcquireCloneLock(ctx, actionDir)
+				if localAction {
+					buildContext, err := rc.JobContainer.GetContainerArchive(ctx, contextDir+"/.")
+					if err != nil {
+						return err
+					}
+					defer buildContext.Close()
+					input.BuildContext = buildContext
+				} else {
+					unlock, err := git.AcquireCloneLock(ctx, actionDir) // held across the whole build, the daemon drains contextDir lazily
 					if err != nil {
 						return err
 					}
 					defer unlock()
-					return inner(ctx)
 				}
-			}
+				return ContainerNewDockerBuildExecutor(input)(ctx)
+			}).Retry(3)
 		} else {
 			logger.Debugf("image '%s' for architecture '%s' already exists", image, rc.Config.ContainerArchitecture)
 		}

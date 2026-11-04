@@ -80,9 +80,6 @@ func lookPath(file string, env map[string]string) (string, error) {
 			return "", &Error{file, err}
 		}
 	}
-	if f, err := findExecutable(filepath.Join(".", file), exts); err == nil {
-		return f, nil
-	}
 	path := getenv(env, "path")
 	for _, dir := range filepath.SplitList(path) {
 		if f, err := findExecutable(filepath.Join(dir, file), exts); err == nil {

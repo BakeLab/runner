@@ -164,7 +164,7 @@ ubuntu-latest:docker://docker.gitea.com/runner-images:ubuntu-latest,macos:host
 
 [gitea/runner-images](https://gitea.com/gitea/runner-images) has suitable images. Jobs matching no label run in `runner.default_image`, or on the host when docker is unavailable.
 
-Host jobs still need a Docker daemon for Docker actions and `docker://` steps. Windows hosts do not support those, as on GitHub. On Windows, a step's background processes end with the job unless it opts out, see [host mode](docs/host-mode.md).
+Host jobs still need a Docker daemon for Docker actions and `docker://` steps. Windows hosts do not support those, as on GitHub. A step's background processes end with the job unless it opts out, see [host mode](docs/host-mode.md).
 
 #### Registration vs config labels
 

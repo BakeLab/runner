@@ -81,6 +81,7 @@ call C:\run.bat
 EOF
 
 kvm=Y cores=max
+cpuFlags=-amx-tile,-amx-int8,-amx-bf16,-amx-fp16,-amx-complex # AMX overflows Go's exception handling into the heap, https://github.com/golang/go/issues/81238
 if ! docker run --rm --privileged --entrypoint sh "$image" -c 'test -w /dev/kvm'; then
   kvm=N cores=4 # more emulated vCPUs slow Windows down
   echo "==> The docker host has no usable /dev/kvm, Windows runs emulated and much slower"
@@ -102,7 +103,7 @@ fi
 deadline=$((SECONDS + timeout * 60))
 boot() {
   name="gitea-runner-windows-test-${work##*.}-$1" # a new name ends the log and monitor loops of the previous VM
-  docker create --rm --name "$name" --privileged -v "$volume:/storage" "${vm[@]}" -e KVM="$kvm" -e CPU_CORES="$cores" -e DISK_CACHE=unsafe -e DISK_IO=threads \
+  docker create --rm --name "$name" --privileged -v "$volume:/storage" "${vm[@]}" -e KVM="$kvm" -e CPU_CORES="$cores" -e CPU_FLAGS="$cpuFlags" -e DISK_CACHE=unsafe -e DISK_IO=threads \
     --entrypoint timeout "$image" "$(((deadline - SECONDS) / 60 + 10))m" /usr/bin/tini -s /run/entry.sh >/dev/null # the timeout stops the VM even when this script is killed before its cleanup runs
   if [ "$cached" = Y ]; then
     docker cp "$cache/storage/." "$name:/storage"

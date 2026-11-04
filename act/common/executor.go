@@ -7,7 +7,9 @@ package common
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"runtime/debug"
+	"time"
 
 	"gitea.com/gitea/runner/act/common/logging"
 )
@@ -156,6 +158,28 @@ func (e Executor) IfBool(conditional bool) Executor {
 	return e.If(func(ctx context.Context) bool {
 		return conditional
 	})
+}
+
+// RetryBackoff is the wait between Retry's attempts, random between 1 and 10 seconds like GitHub's runner.
+var RetryBackoff = func() time.Duration { return time.Second + rand.N(9*time.Second) }
+
+// Retry runs the executor up to attempts times until it succeeds.
+func (e Executor) Retry(attempts int) Executor {
+	return func(ctx context.Context) error {
+		for attempt := 1; ; attempt++ {
+			err := e(ctx)
+			if err == nil || attempt == attempts || ctx.Err() != nil {
+				return err
+			}
+			backoff := RetryBackoff()
+			Logger(ctx).Warnf("%v, retrying in %s", err, backoff.Round(time.Second))
+			select {
+			case <-ctx.Done():
+				return err
+			case <-time.After(backoff):
+			}
+		}
+	}
 }
 
 // Finally adds an executor to run after other executor

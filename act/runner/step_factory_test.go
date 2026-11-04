@@ -37,7 +37,7 @@ func TestStepFactoryInvalidStep(t *testing.T) {
 		{Uses: "remote/action@v1", Run: "cmd"},
 		{Uses: "builtin:unknown"},
 	} {
-		_, err := (&stepFactoryImpl{}).newStep(stepModel, &RunContext{})
-		assert.Error(t, err, stepModel.Uses)
+		_, err := (&stepFactoryImpl{}).newStep(stepModel, &RunContext{Name: "build"})
+		assert.ErrorContains(t, err, "job:build ", stepModel.Uses)
 	}
 }

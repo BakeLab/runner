@@ -57,7 +57,7 @@ func (e *HostEnvironment) processGroup(ctx context.Context) *process.Group {
 	e.procGroupOnce.Do(func() {
 		group, err := process.NewGroup()
 		if err != nil {
-			common.Logger(ctx).Warnf("could not create the job's process group; processes a step leaves behind can only be reclaimed by the workspace scan: %v", err)
+			common.Logger(ctx).Warnf("could not create the job's process group, processes a step leaves behind may outlive the job: %v", err)
 			return
 		}
 		e.procGroup.Store(group)
@@ -415,46 +415,6 @@ func removePathWithRetry(ctx context.Context, path string) error {
 	return lastErr
 }
 
-func (e *HostEnvironment) terminateRunningProcesses(ctx context.Context) {
-	if runtime.GOOS != "windows" {
-		return
-	}
-
-	// Detached: exec.CommandContext won't start on a cancelled ctx, and a
-	// server cancel has already cancelled the parent ctx.
-	killCtx, killCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer killCancel()
-
-	logger := common.Logger(ctx)
-
-	// Dirs we own; a process referencing one is a leftover. ToolCache is shared
-	// across jobs, and Workdir may be a caller-owned checkout.
-	owned := []string{e.Path, e.TmpDir}
-	if e.CleanWorkdir {
-		owned = append(owned, e.Workdir)
-	}
-	dirs := make([]string, 0, len(owned))
-	for _, d := range owned {
-		if d == "" {
-			continue
-		}
-		abs, err := filepath.Abs(d)
-		if err != nil {
-			continue
-		}
-		dirs = append(dirs, abs)
-	}
-	if len(dirs) == 0 {
-		return
-	}
-
-	if killed, err := process.KillProcessesWithPaths(killCtx, dirs, e.TrackingID); err != nil {
-		logger.Debugf("workspace process cleanup reported errors: %v", err)
-	} else if killed > 0 {
-		logger.Debugf("terminated %d leftover workspace process(es)", killed)
-	}
-}
-
 // hostCleanupTimeout bounds each teardown phase so one stalled delete cannot
 // wedge the runner slot. A var so tests can shrink it.
 var hostCleanupTimeout = 30 * time.Second
@@ -463,12 +423,15 @@ func (e *HostEnvironment) Remove() common.Executor {
 	return func(ctx context.Context) error {
 		logger := common.Logger(ctx)
 
-		// End lingering processes before removing the workspace; on Windows their
-		// file locks block cleanup. Closing the group is deterministic, the scan a net.
+		// End lingering processes before removing the workspace, on Windows their file locks block cleanup.
 		if err := e.procGroup.Load().Close(); err != nil {
 			logger.Debugf("closing the job's process group failed: %v", err)
 		}
-		e.terminateRunningProcesses(ctx)
+		if killed, err := process.KillTrackedProcesses(e.TrackingID); err != nil {
+			logger.Debugf("killing the job's leftover processes reported errors: %v", err)
+		} else if killed > 0 {
+			logger.Debugf("killed %d leftover process(es) of the job", killed)
+		}
 
 		// Detach: a cancelled ctx would skip removePathWithRetry's retries,
 		// which absorb Windows file-handle release lag after the kill above.

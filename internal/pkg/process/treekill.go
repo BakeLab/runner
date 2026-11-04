@@ -36,9 +36,9 @@ type TreeKill struct {
 	KeepLeftovers bool
 }
 
-// NewTreeKill sets cmd.Cancel and cmd.WaitDelay. Call it before cmd.Start, then
-// call Capture once after a successful Start.
+// NewTreeKill sets cmd.Cancel, cmd.WaitDelay and CREATE_SUSPENDED. Call it after setting cmd.SysProcAttr, and Capture once after a successful Start.
 func NewTreeKill(cmd *exec.Cmd) *TreeKill {
+	startSuspended(cmd)
 	t := &TreeKill{}
 	cmd.Cancel = func() error {
 		if k := t.killer.Load(); k != nil {
@@ -63,14 +63,17 @@ func NewTreeKill(cmd *exec.Cmd) *TreeKill {
 // Call it once after cmd.Start. On failure the command falls back to the default
 // single-process kill and the returned error is for logging only; WaitDelay
 // still bounds the wait. The returned Killer should be closed when the command
-// finishes (Close is nil-safe).
+// finishes (Close is nil-safe). It also resumes p.
 func (t *TreeKill) Capture(p *os.Process) (*Killer, error) {
 	k, err := NewKiller(p)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		t.killer.Store(k)
 	}
-	t.killer.Store(k)
-	return k, nil
+	if resumeErr := resume(p); resumeErr != nil {
+		_ = p.Kill()
+		return nil, errors.Join(err, k.Close(), resumeErr)
+	}
+	return k, err
 }
 
 // Wait is cmd.Wait, but like GitHub's runner a leftover holding a successful command's output does not fail it.

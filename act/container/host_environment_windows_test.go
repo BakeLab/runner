@@ -4,18 +4,15 @@
 package container
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-	"unsafe"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/windows"
@@ -40,7 +37,6 @@ func TestHostEnvironmentTrackingCleanup(t *testing.T) {
 				}
 			}
 			env["GITEA_TRACKING_HELPER"] = "step"
-			env["GITEA_TRACKING_WORKSPACE"] = workspace
 			env["GITEA_TRACKING_ADDRESS"] = listener.Addr().String()
 			if tracking == "default" {
 				env["RUNNER_TRACKING_ID"] = environment.TrackingID
@@ -52,23 +48,6 @@ func TestHostEnvironmentTrackingCleanup(t *testing.T) {
 			go func() {
 				result <- environment.Exec([]string{os.Args[0], "-test.run=^TestHostTrackingHelper$"}, env, "", workspace)(ctx)
 			}()
-			step, err := listener.Accept()
-			require.NoError(t, err)
-			defer step.Close()
-			require.NoError(t, step.SetDeadline(time.Now().Add(20*time.Second)))
-			var stepPID int
-			_, err = fmt.Fscanln(step, &stepPID)
-			require.NoError(t, err)
-			stepHandle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(stepPID))
-			require.NoError(t, err)
-			defer func() { _ = windows.CloseHandle(stepHandle) }()
-			require.Eventually(t, func() bool {
-				var assigned int32
-				result, _, _ := windows.NewLazySystemDLL("kernel32.dll").NewProc("IsProcessInJob").Call(uintptr(stepHandle), 0, uintptr(unsafe.Pointer(&assigned)))
-				return result != 0 && assigned != 0
-			}, 5*time.Second, 10*time.Millisecond)
-			_, err = step.Write([]byte{1})
-			require.NoError(t, err)
 			var helpers []windows.Handle
 			for range 2 {
 				connection, err := listener.Accept()
@@ -114,23 +93,18 @@ func TestHostTrackingHelper(t *testing.T) {
 	if mode == "" {
 		return
 	}
+	if mode != "descendant" {
+		child := exec.Command(os.Args[0], "-test.run=^TestHostTrackingHelper$")
+		child.Env = append(os.Environ(), "GITEA_TRACKING_HELPER="+map[string]string{"step": "helper", "helper": "descendant"}[mode])
+		require.NoError(t, child.Start())
+		if mode == "step" {
+			os.Exit(0)
+		}
+	}
 	connection, err := net.Dial("tcp4", os.Getenv("GITEA_TRACKING_ADDRESS"))
 	require.NoError(t, err)
 	_, err = fmt.Fprintln(connection, os.Getpid())
 	require.NoError(t, err)
-	if mode == "step" {
-		_, err := bufio.NewReader(connection).ReadByte()
-		require.NoError(t, err)
-	}
-	if mode != "descendant" {
-		child := exec.Command(os.Args[0], "-test.run=^TestHostTrackingHelper$", filepath.Join(os.Getenv("GITEA_TRACKING_WORKSPACE"), "tracking-reference"))
-		child.Env = append(os.Environ(), "GITEA_TRACKING_HELPER="+map[string]string{"step": "helper", "helper": "descendant"}[mode])
-		require.NoError(t, child.Start())
-		if mode == "step" {
-			require.NoError(t, connection.Close())
-			os.Exit(0)
-		}
-	}
 	_, err = io.Copy(io.Discard, connection)
 	require.NoError(t, err)
 	require.NoError(t, connection.Close())

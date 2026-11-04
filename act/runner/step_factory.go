@@ -22,7 +22,7 @@ type stepFactoryImpl struct{}
 func (sf *stepFactoryImpl) newStep(stepModel *model.Step, rc *RunContext) (step, error) {
 	switch stepModel.Type() {
 	case model.StepTypeInvalid:
-		return nil, fmt.Errorf("invalid run/uses syntax for job:%s step:%+v", rc.Run, stepModel)
+		return nil, fmt.Errorf("invalid run/uses syntax for job:%s step:%+v", rc.Name, stepModel)
 	case model.StepTypeRun:
 		return &stepRun{
 			Step:       stepModel,
@@ -40,7 +40,7 @@ func (sf *stepFactoryImpl) newStep(stepModel *model.Step, rc *RunContext) (step,
 			run, ok := builtinActions[name]
 			if !ok {
 				return nil, fmt.Errorf("unknown built-in action %q (known: %v) for job:%s step:%+v",
-					name, slices.Sorted(maps.Keys(builtinActions)), rc.Run, stepModel)
+					name, slices.Sorted(maps.Keys(builtinActions)), rc.Name, stepModel)
 			}
 			return &stepActionBuiltin{
 				Step:       stepModel,
@@ -61,5 +61,5 @@ func (sf *stepFactoryImpl) newStep(stepModel *model.Step, rc *RunContext) (step,
 		}, nil
 	}
 
-	return nil, fmt.Errorf("unable to determine how to run job:%s step:%+v", rc.Run, stepModel)
+	return nil, fmt.Errorf("unable to determine how to run job:%s step:%+v", rc.Name, stepModel)
 }
