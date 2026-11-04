@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -51,9 +52,10 @@ func (s *Storage) writeFile(name string, reader io.Reader) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-
 	_, err = io.Copy(file, reader)
+	if err = errors.Join(err, file.Close()); err != nil {
+		_ = os.Remove(name)
+	}
 	return err
 }
 
@@ -102,50 +104,46 @@ func (s *Storage) Commit(id uint64, size int64) (int64, error) {
 		return 0, err
 	}
 	written, err := assemble(name, tempNames)
-	if err != nil {
-		return 0, err
+	if err == nil && size >= 0 && written != size { // old clients like actions/cache@v2 send no size
+		err = fmt.Errorf("broken file: %v != %v", written, size)
 	}
-	// If size is less than 0, it means the size is unknown.
-	// We can't check the size of the file, just skip the check.
-	// It happens when the request comes from old versions of actions, like `actions/cache@v2`.
-	if size >= 0 && written != size {
+	if err != nil {
 		_ = os.Remove(name)
-		return 0, fmt.Errorf("broken file: %v != %v", written, size)
+		return 0, err
 	}
 	return written, nil
 }
 
-// assemble concatenates the uploaded parts into name. A single part, which is what the v2 API
-// produces below the client's block threshold, is already the whole archive and is moved.
+// assemble appends the parts into the first, deleting each once copied, so it never needs twice the space.
 func assemble(name string, tempNames []string) (int64, error) {
-	if len(tempNames) == 1 {
-		info, err := os.Stat(tempNames[0])
-		if err != nil {
-			return 0, err
-		}
-		return info.Size(), os.Rename(tempNames[0], name)
+	if len(tempNames) == 0 {
+		return 0, errors.New("nothing was uploaded")
 	}
-
-	file, err := os.Create(name)
+	if err := os.Rename(tempNames[0], name); err != nil {
+		return 0, err
+	}
+	file, err := os.OpenFile(name, os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
 		return 0, err
 	}
 	defer file.Close()
-
-	var written int64
-	for _, v := range tempNames {
-		f, err := os.Open(v)
+	for _, v := range tempNames[1:] {
+		part, err := os.Open(v)
 		if err != nil {
 			return 0, err
 		}
-		n, err := io.Copy(file, f)
-		_ = f.Close()
+		_, err = io.Copy(file, part)
+		_ = part.Close()
 		if err != nil {
 			return 0, err
 		}
-		written += n
+		_ = os.Remove(v)
 	}
-	return written, nil
+	info, err := file.Stat()
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), file.Close()
 }
 
 func (s *Storage) Serve(w http.ResponseWriter, r *http.Request, id uint64) {

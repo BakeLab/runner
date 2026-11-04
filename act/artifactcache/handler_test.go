@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"testing/synctest"
 	"time"
 
@@ -673,7 +674,7 @@ func TestHandler_evictPolicy(t *testing.T) {
 	}
 }
 
-func TestHandler_evictForFreeSpace(t *testing.T) {
+func TestHandler_makeRoom(t *testing.T) {
 	t.Parallel()
 	free := func(n int64) func(string) (uint64, error) {
 		return func(string) (uint64, error) { return uint64(n), nil }
@@ -682,14 +683,16 @@ func TestHandler_evictForFreeSpace(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		freeDisk func(string) (uint64, error)
+		upload   int64
 		kept     []string
 	}{
-		{"ample free space evicts nothing", free(defaultMinFreeDisk), []string{"oldest", "middle", "newest"}},
-		{"a small shortfall sheds one entry", free(defaultMinFreeDisk - 4*miB), []string{"middle", "newest"}},
-		{"a shortfall the cache cannot cover sheds all of it", free(0), nil},
+		{"ample free space evicts nothing", free(defaultMinFreeDisk), 0, []string{"oldest", "middle", "newest"}},
+		{"room for an upload sheds the oldest entry", free(defaultMinFreeDisk), 4 * miB, []string{"middle", "newest"}},
+		{"a shortfall the cache cannot cover sheds all of it", free(0), 0, nil},
 		{
 			"an unreadable volume is treated as unavailable, not as full",
 			func(string) (uint64, error) { return 0, errors.New("unsupported") },
+			0,
 			[]string{"oldest", "middle", "newest"},
 		},
 	} {
@@ -702,11 +705,7 @@ func TestHandler_evictForFreeSpace(t *testing.T) {
 			}
 			handler := newTestHandler(t, Policy{}, entries...)
 			handler.freeDisk = tc.freeDisk
-
-			db, err := handler.openDB()
-			require.NoError(t, err)
-			handler.evictForFreeSpace(db)
-			require.NoError(t, db.Close())
+			handler.makeRoom(tc.upload)
 
 			assert.ElementsMatch(t, tc.kept, keptKeys(t, handler, entries))
 		})
@@ -886,6 +885,13 @@ func keptKeys(t *testing.T, handler *Handler, entries []*Cache) []string {
 		}
 	}
 	return kept
+}
+
+func TestStorageDropsFailedWrites(t *testing.T) {
+	storage, err := NewStorage(t.TempDir())
+	require.NoError(t, err)
+	require.Error(t, storage.Write(1, 0, io.MultiReader(strings.NewReader("partial"), iotest.ErrReader(io.ErrUnexpectedEOF))))
+	assert.NoFileExists(t, storage.tempName(1, 0))
 }
 
 func writeBlob(t *testing.T, handler *Handler, id uint64) {

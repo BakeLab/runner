@@ -206,8 +206,8 @@ cache:
   # How the cache server discards entries, ignored when external_server or s3 is set since
   # those apply their own. Leave a setting out for its default; 0s or 0 turns the three
   # limits off. Sizes accept 10GB, 512mb, 1TiB or a plain byte count, binary either way.
-  # Whatever these allow, the cache still sheds entries to keep free space on its volume
-  # above health_check.min_free_disk_space_mb when health checks are enabled.
+  # Whatever these allow, the cache still sheds entries to keep free space on its volume, room
+  # for uploads included, above health_check.min_free_disk_space_mb when health checks are enabled.
   # Remove entries nothing has read or written within this window. Only last access counts.
   #retention: 168h
   # Cap one repository, removing its least recently accessed entries until it fits. An entry

@@ -218,6 +218,7 @@ func (h *Handler) v2UploadBlob(w http.ResponseWriter, r *http.Request) {
 		h.responseJSON(w, r, http.StatusBadRequest, err)
 		return
 	}
+	h.makeRoom(r.ContentLength)
 
 	query := r.URL.Query()
 	switch strings.ToLower(query.Get("comp")) {

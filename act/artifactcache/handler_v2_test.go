@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -84,6 +85,8 @@ func TestCacheServiceV2RoundTrip(t *testing.T) {
 
 	unsigned := fmt.Sprintf("%s%s/1", handler.ExternalURL(), blobPath)
 	assert.Equal(t, http.StatusUnauthorized, putBlob(t, unsigned, content))
+	unreserved := handler.signedURL(JobCredential{Repo: testRepo}, blobPath, blobUploadPurpose, 1, time.Now().Add(time.Minute))
+	assert.Equal(t, http.StatusBadRequest, putBlob(t, unreserved, content))
 
 	finalized, uploadURL := saveV2(t, handler, "deps-v1", "abc123", content)
 	require.Equal(t, true, finalized["ok"])
