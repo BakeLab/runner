@@ -57,6 +57,29 @@ jobs:
           make coverage-report
           cat .tmp/coverage.md >> "$GITHUB_STEP_SUMMARY"
 
+  windows:
+    name: test on windows
+    runs-on: ubuntu-latest-kvm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.gitea/actions/go-setup
+      - name: prepare anonymous docker config
+        run: mkdir -p "$DOCKER_CONFIG" && echo '{}' > "$DOCKER_CONFIG/config.json"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/windows-vm
+          key: windows-vm
+      - name: test on windows
+        id: test-windows
+        run: WINDOWS_TEST_CACHE="$HOME/.cache/windows-vm" make test-windows
+        env:
+          WINDOWS_TEST_TIMEOUT: 45
+      - if: always() && steps.test-windows.outputs.save-cache == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/windows-vm
+          key: windows-vm
+
   e2e:
     name: gitea compatibility (${{ matrix.gitea_image }})
     runs-on: ubuntu-latest

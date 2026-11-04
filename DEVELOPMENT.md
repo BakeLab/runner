@@ -77,4 +77,5 @@ repository runners. A run path is `<workflow>@<ref>` and a log row is `<timestam
 The host must be amd64 and allow privileged containers. `WINDOWS_TEST_TIMEOUT` sets the minutes
 allowed for installing Windows and running the tests, 165 by default. The VM uses KVM when the host
 has `/dev/kvm`, otherwise Windows is emulated and much slower. Docker-backed tests skip in the VM
-and the race detector is off, it needs cgo. CI runs this weekly and on demand.
+and the race detector is off, it needs cgo. `WINDOWS_TEST_CACHE` names a directory to keep the
+installed Windows in, so later runs skip the install. CI runs this on every pull request.

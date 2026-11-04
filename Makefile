@@ -153,7 +153,7 @@ test-dind: ## run the daemon-facing tests against the built dind image or podman
 
 .PHONY: test-windows
 test-windows: ## run the tests on Windows Server Core in a QEMU VM on the docker host
-	@WINDOWS_TEST_IMAGE=$(WINDOWS_TEST_IMAGE) ./scripts/test-windows.sh
+	@GO=$(GO) WINDOWS_TEST_IMAGE=$(WINDOWS_TEST_IMAGE) ./scripts/test-windows.sh
 
 E2E_CONCURRENCY ?= 8
 
