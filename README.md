@@ -95,7 +95,7 @@ The recommended Docker-in-Docker image runs its own Docker daemon for jobs. Jobs
 
 ```bash
 docker run --privileged -e GITEA_INSTANCE_URL=https://your_gitea.com -e GITEA_RUNNER_REGISTRATION_TOKEN=<your_token> \
-  -v "$PWD/data:/data" -v runner-docker:/var/lib/docker --name my_runner gitea/runner:nightly-dind
+  -v "$PWD/data:/data" -v runner-docker:/var/lib/docker --name my_runner gitea/runner:latest-dind
 ```
 
 The volumes keep the registration and the image cache across container recreation. The image reads more variables, such as `GITEA_RUNNER_LABELS` and `CONFIG_FILE`, see [scripts/run.sh](scripts/run.sh) and the [Docker example](examples/docker/README.md).

@@ -8,7 +8,7 @@ docker run --privileged \
   -e GITEA_RUNNER_REGISTRATION_TOKEN=<runner_token> \
   -v "$PWD/data:/data" \
   -v runner-docker:/var/lib/docker \
-  --name my_runner gitea/runner:nightly-dind
+  --name my_runner gitea/runner:latest-dind
 ```
 
 The volumes keep the runner's registration and the job image cache. See [image flavours](../../README.md#image-flavours) for alternatives.

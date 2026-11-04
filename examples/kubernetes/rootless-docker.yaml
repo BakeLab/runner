@@ -70,7 +70,7 @@ spec:
         fsGroup: 1000
       containers:
       - name: runner
-        image: gitea/runner:nightly-dind-rootless
+        image: gitea/runner:latest-dind-rootless
         imagePullPolicy: Always
         env:
         - name: DOCKER_HOST

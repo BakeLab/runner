@@ -58,7 +58,7 @@ spec:
       terminationGracePeriodSeconds: 10800 # keep above runner.shutdown_timeout, see README
       containers:
       - name: runner
-        image: gitea/runner:nightly
+        image: gitea/runner:latest
         env:
         - name: GITEA_INSTANCE_URL
           value: http://gitea-http.gitea.svc.cluster.local:3000
