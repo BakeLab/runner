@@ -174,9 +174,6 @@ func Main(ctx context.Context, c *action.Context) (err error) {
 		env["GIT_SSH_COMMAND"] = shellquote.Join(ssh...)
 		config += "[core]\n\tsshCommand = " + strconv.Quote(env["GIT_SSH_COMMAND"]) + "\n"
 	}
-	if !persist {
-		config = ""
-	}
 
 	if co.objectFormat == "" || co.sha == "" && !strings.HasPrefix(co.ref, "refs/") {
 		advertised, err := lsRemote(ctx, c, env, co.url, co.ref)
@@ -191,7 +188,7 @@ func Main(ctx context.Context, c *action.Context) (err error) {
 	if ref != co.sha {
 		co.outputRef = cmp.Or(ref, co.ref) // as given, like actions/checkout
 	}
-	if err := c.Container.Copy(runnerTemp, &container.FileEntry{Name: credentials, Mode: 0o600, Body: config})(ctx); err != nil {
+	if err := c.Container.Copy(runnerTemp, &container.FileEntry{Name: credentials, Mode: 0o600})(ctx); err != nil {
 		return err
 	}
 
@@ -215,7 +212,10 @@ func Main(ctx context.Context, c *action.Context) (err error) {
 		}
 		commands = commands[fetched:]
 	}
-	return clone(commands)
+	if err := clone(commands); err != nil || !persist {
+		return err
+	}
+	return c.Container.Copy(runnerTemp, &container.FileEntry{Name: credentials, Mode: 0o600, Body: config})(ctx) // for later steps, the step itself authenticates through env
 }
 
 func gitEnv(c *action.Context, config []string) map[string]string {

@@ -54,7 +54,7 @@ func TestCheckout(t *testing.T) {
 	server := t.TempDir()
 	serverURL := (&url.URL{Scheme: "file", Path: "/" + strings.TrimPrefix(filepath.ToSlash(server), "/")}).String()
 	var sha string
-	_, lfsErr := exec.LookPath("git-lfs")
+	lfsPath, lfsErr := exec.LookPath("git-lfs")
 	require.True(t, t.Run("fixtures", func(t *testing.T) {
 		t.Run("history", func(t *testing.T) {
 			t.Parallel()
@@ -106,6 +106,10 @@ test -s "$2" || exit 1
 printf '%s\n' "$@" > "$SSH_ARGS"
 for last; do :; done
 exec sh -c "$(printf '%s' "$last" | sed "s#git-upload-pack '/\(.*\)\.git'#git upload-pack '$SSH_SERVER/\1'#")"
+`), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tools, "git-lfs"), []byte(`#!/bin/sh
+git config --get-regexp extraheader > "$LFS_HEADERS"
+exec "$LFS" "$@"
 `), 0o755))
 	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
 	require.NoError(t, os.WriteFile(globalConfig, []byte("[protocol \"file\"]\n\tallow = always\n"), 0o644))
@@ -214,6 +218,7 @@ exec sh -c "$(printf '%s' "$last" | sed "s#git-upload-pack '/\(.*\)\.git'#git up
 					Env: map[string]string{
 						"PATH": tools + string(os.PathListSeparator) + os.Getenv("PATH"), "GIT_CONFIG_GLOBAL": globalConfig, "GIT_CONFIG_NOSYSTEM": "1",
 						"GIT_DIR": host, "GITHUB_OUTPUT": output, "SSH_SERVER": filepath.ToSlash(server), "SSH_ARGS": filepath.Join(runnerTemp, "ssh-args"),
+						"LFS": lfsPath, "LFS_HEADERS": filepath.Join(runnerTemp, "lfs-headers"),
 					},
 				})
 			}
@@ -278,6 +283,10 @@ exec sh -c "$(printf '%s' "$last" | sed "s#git-upload-pack '/\(.*\)\.git'#git up
 				assert.Len(t, strings.Fields(gitOutput(repo, "config", "--local", "--get-all", credentialsInclude)), 1, repo)
 				headers, _ := exec.Command("git", "-C", repo, "config", "--get-all", "http."+serverURL+"/.extraheader").Output()
 				assert.Equal(t, persisted, string(headers) == "\nAuthorization: Basic dG9rZW46dG9r\n", repo)
+			}
+			if tc.inputs["lfs"] == "true" && runtime.GOOS != "windows" {
+				headers, _ := os.ReadFile(filepath.Join(runnerTemp, "lfs-headers"))
+				assert.Equal(t, 1, strings.Count(string(headers), "Authorization"), string(headers))
 			}
 			if tc.inputs["ssh-key"] != "" {
 				keys, _ := filepath.Glob(filepath.Join(runnerTemp, "git-ssh-key-*"))
