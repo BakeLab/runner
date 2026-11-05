@@ -243,7 +243,7 @@ volumes:
   - ${GITEA_DOCKER_WORKSPACE:-.}/data:/app/data
 ```
 
-In most Linux container jobs, the containers, networks and volumes a job creates are removed when it ends, `docker compose` services included. Set `container.sweep: false` if jobs deploy services to the runner's Docker daemon.
+Set `container.sweep: true` to remove the containers, networks and volumes most Linux container jobs create when they end, `docker compose` services included. Leave it off if jobs deploy services to the runner's Docker daemon.
 
 ### Built-in actions (`uses: builtin:<name>`)
 

@@ -306,8 +306,8 @@ container:
   # healthy. A negative value (e.g. -1s) starts the steps without waiting.
   #service_ready_timeout: 5m
   # Remove the containers, networks and volumes a job creates through its Docker proxy when
-  # the job ends. Set to false when jobs deploy services to the runner's Docker daemon.
-  #sweep: true
+  # the job ends. Leave off when jobs deploy services to the runner's Docker daemon.
+  #sweep: false
 
 host:
   # The parent directory of a job's working directory.

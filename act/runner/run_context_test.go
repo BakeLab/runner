@@ -725,7 +725,7 @@ func TestCleanupJobResources(t *testing.T) {
 			service.On("Remove").Return(removeAlongside(serviceRemoving, jobRemoving, removeError)).Once()
 			service.On("Close").Return(func(context.Context) error { return closeError }).Once()
 			rc := &RunContext{
-				Config:            &Config{CacheContainer: "cache-container", NoSweep: name == "kept proxy"},
+				Config:            &Config{CacheContainer: "cache-container", Sweep: name != "kept proxy"},
 				Run:               &model.Run{Workflow: &model.Workflow{Name: "wf"}, JobID: "job"},
 				JobContainer:      job,
 				serviceContainers: []*serviceContainer{{name: "svc", container: service}},

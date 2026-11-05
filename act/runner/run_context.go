@@ -810,7 +810,7 @@ func (rc *RunContext) cleanupJobResources(networkName string, createAndDeleteNet
 		errs = append(errs, runAll(ctx, containers))
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jobCleanupTimeout)
 		defer cancel()
-		if !common.Dryrun(ctx) && !rc.Config.NoSweep && (preclean || rc.hadDockerProxy) {
+		if !common.Dryrun(ctx) && rc.Config.Sweep && (preclean || rc.hadDockerProxy) {
 			errs = append(errs, container.RemoveDockerJobResources(ctx, rc.jobContainerName())) // after the containers, whose endpoints would block removing the job networks
 		}
 		var rest []common.Executor
