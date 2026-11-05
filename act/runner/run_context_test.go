@@ -1490,7 +1490,7 @@ func TestCopyWorkflowFilesHandsNodeTheRunnerCAUnlessTheJobOrImageSetsIt(t *testi
 		return env
 	}
 
-	assert.Equal(t, actPath+"/ca.crt", stepEnv(caFile, nil, nil, nil)["NODE_EXTRA_CA_CERTS"])
+	assert.Equal(t, filepath.ToSlash(actPath)+"/ca.crt", stepEnv(caFile, nil, nil, nil)["NODE_EXTRA_CA_CERTS"])
 	ca, err := os.ReadFile(filepath.Join(actPath, "ca.crt"))
 	require.NoError(t, err)
 	assert.Equal(t, "PEM\n", string(ca))
