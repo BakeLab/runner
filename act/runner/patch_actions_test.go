@@ -4,6 +4,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -182,9 +183,9 @@ func TestPatchedBundleSurvivesInsideAStringLiteral(t *testing.T) {
 	out, patched := patchedBundle([]byte(embedded))
 	require.True(t, patched)
 
-	file := filepath.Join(t.TempDir(), "bundle.js")
-	require.NoError(t, os.WriteFile(file, out, 0o600))
-	checked, err := exec.CommandContext(t.Context(), "node", "--check", file).CombinedOutput()
+	cmd := exec.CommandContext(t.Context(), "node", "--check", "-")
+	cmd.Stdin = bytes.NewReader(out)
+	checked, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", checked)
 }
 
@@ -256,6 +257,14 @@ func TestActionScriptPaths(t *testing.T) {
 }
 
 func TestPatchActionsAtTheContainerCopy(t *testing.T) {
+	actionDir := t.TempDir()
+	script := filepath.Join(actionDir, "dist", "cache.js")
+	require.NoError(t, os.MkdirAll(filepath.Dir(script), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(script), "index.js"), []byte("require('./cache.js')"), 0o600))
+	require.NoError(t, os.WriteFile(script, []byte(gateTSC), 0o600))
+	info, err := os.Stat(script)
+	require.NoError(t, err)
+
 	copiedBundles := func(t *testing.T, noPatch bool) ([]string, []*container.FileEntry, int64) {
 		t.Helper()
 
@@ -264,19 +273,12 @@ func TestPatchActionsAtTheContainerCopy(t *testing.T) {
 			Step:         &model.Step{Uses: "owner/repo/sub@v1"},
 			remoteAction: &remoteAction{Org: "owner", Repo: "repo", Path: "sub", Ref: "v1"},
 			action:       &model.Action{Runs: model.ActionRuns{Using: "node20", Main: "../dist/index.js"}},
-			actionDir:    t.TempDir(),
+			actionDir:    actionDir,
 			RunContext: &RunContext{
-				Config:       &Config{ActionCacheDir: t.TempDir(), NoActionPatch: noPatch},
+				Config:       &Config{NoActionPatch: noPatch},
 				JobContainer: cm,
 			},
 		}
-		script := filepath.Join(sar.actionDir, "dist", "cache.js")
-		require.NoError(t, os.MkdirAll(filepath.Dir(script), 0o755))
-		require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(script), "index.js"), []byte("require('./cache.js')"), 0o600))
-		require.NoError(t, os.WriteFile(script, []byte(gateTSC), 0o600))
-		info, err := os.Stat(script)
-		require.NoError(t, err)
-
 		var calls []string
 		var copied []*container.FileEntry
 		cm.On("CopyDir", "/var/run/act/actions/repo/", sar.actionDir+"/", false, true).Return(func(context.Context) error {

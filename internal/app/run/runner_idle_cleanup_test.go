@@ -21,8 +21,7 @@ import (
 
 func TestRunnerCleanupStaleTaskDirs(t *testing.T) {
 	now := time.Date(2026, time.April, 29, 20, 0, 0, 0, time.UTC)
-	workdirRoot := filepath.Join(t.TempDir(), "workspace")
-	require.NoError(t, os.MkdirAll(workdirRoot, 0o700))
+	workdirRoot := t.TempDir()
 
 	oldTask := filepath.Join(workdirRoot, "1001")
 	freshTask := filepath.Join(workdirRoot, "1002")
@@ -59,8 +58,7 @@ func TestRunnerCleanupStaleTaskDirs(t *testing.T) {
 // be reclaimed, while the shared tool_cache and operator data are preserved.
 func TestRunnerOnIdleCleansStaleHostScratchDirs(t *testing.T) {
 	now := time.Date(2026, time.April, 29, 20, 0, 0, 0, time.UTC)
-	hostRoot := filepath.Join(t.TempDir(), "act")
-	require.NoError(t, os.MkdirAll(hostRoot, 0o700))
+	hostRoot := t.TempDir()
 
 	staleScratch := filepath.Join(hostRoot, "0123456789abcdef") // 16 hex
 	freshScratch := filepath.Join(hostRoot, "fedcba9876543210")
@@ -118,8 +116,7 @@ func TestRunnerCleanupStaleTaskDirsMissingRoot(t *testing.T) {
 
 func TestRunnerCleanupStaleTaskDirsHonorsContext(t *testing.T) {
 	now := time.Date(2026, time.April, 29, 20, 0, 0, 0, time.UTC)
-	workdirRoot := filepath.Join(t.TempDir(), "workspace")
-	require.NoError(t, os.MkdirAll(workdirRoot, 0o700))
+	workdirRoot := t.TempDir()
 
 	for i := 1001; i <= 1003; i++ {
 		dir := filepath.Join(workdirRoot, strconv.Itoa(i))

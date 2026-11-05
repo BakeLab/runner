@@ -4,6 +4,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"io"
@@ -209,14 +210,14 @@ func TestPatchedBundleAcrossActions(t *testing.T) {
 				assert.Equal(t, data, out, "an untouched bundle must come back byte for byte")
 				return
 			}
-			assert.NotContains(t, string(out), ".LOCALHOST", "a copy of the gate was missed")
+			assert.False(t, bytes.Contains(out, []byte(".LOCALHOST")), "a copy of the gate was missed")
 
-			if !strings.Contains(string(data), CacheServiceV2Env) {
+			if !bytes.Contains(data, []byte(CacheServiceV2Env)) {
 				return
 			}
-			assert.NotZero(t, strings.Count(string(out), "(process.env."+cacheURLEnv+"||process.env"),
+			assert.NotZero(t, bytes.Count(out, []byte("(process.env."+cacheURLEnv+"||process.env")),
 				"the cache service URL was not redirected")
-			assert.Equal(t, strings.Count(string(data), resultsURLEnv), strings.Count(string(out), resultsURLEnv),
+			assert.Equal(t, bytes.Count(data, []byte(resultsURLEnv)), bytes.Count(out, []byte(resultsURLEnv)),
 				"a read of the results URL was lost, it must stay as the fallback")
 		})
 	}
@@ -311,18 +312,18 @@ func TestCodeSplitActionFindsTheCacheService(t *testing.T) {
 	requireHostTools(t, "node", "rustc")
 
 	dir := tempDirPath(t)
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "dist"), 0o755))
 	for _, name := range []string{
 		"action.yml", "dist/restore.js", "dist/save.js", "dist/cleanup-BWEbZ6YT.js",
 		"dist/cache-CTfQoCTL.js", "dist/cache-DC26rUaF.js", "dist/state-cjs-CkvFUaNy.js",
 	} {
 		body, err := os.ReadFile(bundleFromGitHub(t, "Swatinem/rust-cache", "v2.9.2", name))
 		require.NoError(t, err)
-		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), body, 0o600))
 	}
 	body, err := os.ReadFile(filepath.Join(dir, "action.yml"))
 	require.NoError(t, err)
-	action, err := model.ReadAction(strings.NewReader(string(body)))
+	action, err := model.ReadAction(bytes.NewReader(body))
 	require.NoError(t, err)
 	inputs := map[string]string{"lookup-only": "true", "add-rust-environment-hash-key": "false", "cache-bin": "false"}
 	for name, input := range action.Inputs {

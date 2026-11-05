@@ -117,7 +117,8 @@ func TestExportRetriesAndMatchesOTLP(t *testing.T) {
 	certificate := server.TLS.Certificates[0]
 	key, err := x509.MarshalPKCS8PrivateKey(certificate.PrivateKey)
 	require.NoError(t, err)
-	certificatePath, keyPath := filepath.Join(t.TempDir(), "cert.pem"), filepath.Join(t.TempDir(), "key.pem")
+	dir := t.TempDir()
+	certificatePath, keyPath := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
 	require.NoError(t, os.WriteFile(certificatePath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Certificate[0]}), 0o600))
 	require.NoError(t, os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key}), 0o600))
 	setEnv(t, map[string]string{

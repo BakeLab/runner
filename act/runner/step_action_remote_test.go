@@ -35,14 +35,8 @@ func setFetch(t *testing.T, fetch func(context.Context, git.NewGitCloneExecutorI
 func TestShortSHAActionRejected(t *testing.T) {
 	actionRoot := t.TempDir()
 	repo := filepath.Join(actionRoot, "actions", "hello-world-docker-action")
-	require.NoError(t, os.MkdirAll(repo, 0o755))
-	gitMust(t, "", "init", "--initial-branch=main", repo)
-	gitMust(t, repo, "config", "user.email", "test@test")
-	gitMust(t, repo, "config", "user.name", "test")
-	require.NoError(t, os.WriteFile(filepath.Join(repo, "action.yml"),
-		[]byte("name: hello\nruns:\n  using: node24\n  main: index.js\n"), 0o644))
-	gitMust(t, repo, "add", ".")
-	gitMust(t, repo, "commit", "-m", "initial")
+	gitMust(t, "", "init", "--template=", "--initial-branch=main", repo)
+	gitMust(t, repo, "commit", "--allow-empty", "-m", "initial")
 	output, err := exec.Command("git", "-C", repo, "rev-parse", "--short=7", "HEAD").Output()
 	require.NoError(t, err)
 
@@ -393,7 +387,7 @@ func TestStepActionRemotePreResolvesDownloadedCommit(t *testing.T) {
 		[]byte("name: setup-go\nruns:\n  using: node20\n  main: index.js\n"), 0o600))
 
 	for _, args := range [][]string{
-		{"init", "--initial-branch=main", actionDir},
+		{"init", "--template=", "--initial-branch=main", actionDir},
 		{"-C", actionDir, "add", "action.yml"},
 		{"-C", actionDir, "-c", "user.name=runner", "-c", "user.email=runner@example.com", "-c", "commit.gpgsign=false", "commit", "-m", "action"},
 	} {

@@ -33,24 +33,17 @@ func TestReusableWorkflowCachedBranchRefRefreshes(t *testing.T) {
 	}
 
 	remoteDir := t.TempDir()
-	gitMust(t, "", "init", "--bare", "--initial-branch=master", remoteDir)
-
-	workDir := t.TempDir()
-	gitMust(t, "", "clone", remoteDir, workDir)
-	gitMust(t, workDir, "config", "user.email", "test@test")
-	gitMust(t, workDir, "config", "user.name", "test")
-	gitMust(t, workDir, "checkout", "-b", "master")
+	gitMust(t, "", "init", "--template=", "--initial-branch=master", remoteDir)
 
 	const workflowPath = ".gitea/workflows/reusable.yml"
 	tmpl := func(tag string) string {
 		return "name: reusable\non:\n  workflow_call:\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo " + tag + "\n"
 	}
 
-	require.NoError(t, os.MkdirAll(filepath.Join(workDir, ".gitea/workflows"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workDir, workflowPath), []byte(tmpl("v1")), 0o644))
-	gitMust(t, workDir, "add", workflowPath)
-	gitMust(t, workDir, "commit", "-m", "v1")
-	gitMust(t, workDir, "push", "-u", "origin", "master")
+	require.NoError(t, os.MkdirAll(filepath.Join(remoteDir, ".gitea/workflows"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(remoteDir, workflowPath), []byte(tmpl("v1")), 0o644))
+	gitMust(t, remoteDir, "add", workflowPath)
+	gitMust(t, remoteDir, "commit", "-m", "v1")
 
 	rc := &RunContext{
 		Config: &Config{Env: testCheckoutEnv()},
@@ -70,9 +63,8 @@ func TestReusableWorkflowCachedBranchRefRefreshes(t *testing.T) {
 	require.Equal(t, tmpl("v1"), string(got))
 
 	// Branch tip moves; cache key (cacheDir) does not.
-	require.NoError(t, os.WriteFile(filepath.Join(workDir, workflowPath), []byte(tmpl("v2")), 0o644))
-	gitMust(t, workDir, "commit", "-am", "v2")
-	gitMust(t, workDir, "push", "origin", "master")
+	require.NoError(t, os.WriteFile(filepath.Join(remoteDir, workflowPath), []byte(tmpl("v2")), 0o644))
+	gitMust(t, remoteDir, "commit", "-am", "v2")
 
 	require.NoError(t, cloneRemoteReusableWorkflow(rc, remoteDir, "master", cacheDir)(t.Context()))
 	got, err = os.ReadFile(filepath.Join(cacheDir, workflowPath))
@@ -214,7 +206,7 @@ func TestInstanceAuthAndTransportOnlyApplyToTheInstance(t *testing.T) {
 
 func gitMust(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", append([]string{"-c", "user.name=test", "-c", "user.email=test@test"}, args...)...)
 	if dir != "" {
 		cmd.Dir = dir
 	}

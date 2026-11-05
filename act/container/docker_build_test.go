@@ -42,11 +42,11 @@ func TestDockerBuildLabelsImageWithItsTagAndReportsDaemonError(t *testing.T) {
 
 func TestCreateBuildContextFollowsDockerignoreAndSymlinkedRootButKeepsDockerfile(t *testing.T) {
 	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "build"), 0o755))
 	for name, content := range map[string]string{
 		".dockerignore": "*.log\nbuild\n!build/keep.txt\nDockerfile", "Dockerfile": "FROM scratch", "a.txt": "a",
 		"a.log": "log", "build/drop.txt": "drop", "build/keep.txt": "keep",
 	} {
-		require.NoError(t, os.MkdirAll(filepath.Join(dir, filepath.Dir(name)), 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644))
 	}
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "empty"), 0o755))

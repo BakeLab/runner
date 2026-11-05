@@ -1666,21 +1666,21 @@ func TestRunContextUpdateExtraPath(t *testing.T) {
 	longPath := strings.Repeat("x", 64*1024+1)
 	for _, testcase := range []struct {
 		name    string
-		content []byte
+		content string
 		want    string
 		wantErr bool
 	}{
-		{name: "UTF-8 BOM", content: []byte("\xef\xbb\xbf/utf8/tools\n"), want: "/utf8/tools"},
-		{name: "UTF-16 BOM", content: []byte{0xff, 0xfe, 'C', 0, ':', 0, '\\', 0, 't', 0, 'o', 0, 'o', 0, 'l', 0, 's', 0, '\n', 0}, want: `C:\tools`},
-		{name: "over 64 KiB", content: []byte(longPath + "\n"), want: longPath},
-		{name: "over 16 MiB", content: []byte(strings.Repeat("x", 16*1024*1024+1)), wantErr: true},
+		{name: "UTF-8 BOM", content: "\xef\xbb\xbf/utf8/tools\n", want: "/utf8/tools"},
+		{name: "UTF-16 BOM", content: "\xff\xfeC\x00:\x00\\\x00t\x00o\x00o\x00l\x00s\x00\n\x00", want: `C:\tools`},
+		{name: "over 64 KiB", content: longPath + "\n", want: longPath},
+		{name: "over 16 MiB", content: strings.Repeat("x", 16*1024*1024+1), wantErr: true},
 	} {
 		t.Run(testcase.name, func(t *testing.T) {
 			logger := logging.New(logging.DiscardHandler)
 			ctx := common.WithLogger(t.Context(), logger)
 			jobContainer := &containerMock{}
 			jobContainer.On("GetContainerArchive", mock.Anything, "/github/path").
-				Return(io.NopCloser(bytes.NewReader(tarArchive(t, tarEntry{name: "path", body: string(testcase.content)}))), nil).Once()
+				Return(io.NopCloser(bytes.NewReader(tarArchive(t, tarEntry{name: "path", body: testcase.content}))), nil).Once()
 			defer jobContainer.AssertExpectations(t)
 			rc := &RunContext{JobContainer: jobContainer}
 

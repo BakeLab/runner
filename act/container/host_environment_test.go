@@ -32,6 +32,11 @@ func TestActionPlatformNames(t *testing.T) {
 }
 
 func TestCopyDir(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "action")
+	require.NoError(t, os.MkdirAll(filepath.Join(src, ".git", "objects"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(src, ".git", "objects", "pack"), []byte("x"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "action.yml"), []byte("name: x\n"), 0o600))
+
 	for _, test := range []struct {
 		name                     string
 		useGitIgnore, skipGitDir bool
@@ -41,11 +46,6 @@ func TestCopyDir(t *testing.T) {
 		{name: "unfiltered outside a git repository", useGitIgnore: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			src := filepath.Join(t.TempDir(), "action")
-			require.NoError(t, os.MkdirAll(filepath.Join(src, ".git", "objects"), 0o700))
-			require.NoError(t, os.WriteFile(filepath.Join(src, ".git", "objects", "pack"), []byte("x"), 0o600))
-			require.NoError(t, os.WriteFile(filepath.Join(src, "action.yml"), []byte("name: x\n"), 0o600))
-
 			dest := filepath.Join(t.TempDir(), "dest")
 			require.NoError(t, (&HostEnvironment{}).CopyDir(dest, src+string(filepath.Separator), test.useGitIgnore, test.skipGitDir)(t.Context()))
 

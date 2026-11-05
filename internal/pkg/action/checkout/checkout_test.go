@@ -59,7 +59,7 @@ func TestCheckout(t *testing.T) {
 		t.Run("history", func(t *testing.T) {
 			t.Parallel()
 			work := t.TempDir()
-			runGit(t, "init", "--initial-branch=main", work)
+			runGit(t, "init", "--template=", "--initial-branch=main", work)
 			runGit(t, "-C", work, "commit", "--allow-empty", "-m", "c1")
 			sha = runGit(t, "-C", work, "rev-parse", "HEAD")
 			runGit(t, "-C", work, "tag", "v1")
@@ -77,7 +77,7 @@ func TestCheckout(t *testing.T) {
 		t.Run("sha256", func(t *testing.T) {
 			t.Parallel()
 			sha256Repo := filepath.Join(server, "org", "sha256")
-			runGit(t, "init", "--object-format=sha256", "--initial-branch=main", sha256Repo)
+			runGit(t, "init", "--template=", "--object-format=sha256", "--initial-branch=main", sha256Repo)
 			runGit(t, "-C", sha256Repo, "commit", "--allow-empty", "-m", "s1")
 			runGit(t, "-C", sha256Repo, "checkout", "--detach")
 		})
@@ -267,21 +267,41 @@ exec "$LFS" "$@"
 				assert.Contains(t, string(outputs), "ref="+cmp.Or(tc.eventRef, "refs/heads/main")+"\n")
 				return
 			}
-			if tc.head == "" {
-				assert.Empty(t, gitOutput(dst, "symbolic-ref", "-q", "HEAD"))
-			} else {
-				assert.Equal(t, "refs/heads/"+tc.head, gitOutput(dst, "symbolic-ref", "-q", "HEAD"))
-				assert.Equal(t, "origin/"+tc.head, gitOutput(dst, "rev-parse", "--abbrev-ref", "@{u}"))
+			headArgs := []string{"-C", dst, "rev-parse", "HEAD", "--symbolic-full-name", "HEAD"}
+			if tc.head != "" {
+				headArgs = append(headArgs, "--abbrev-ref", "@{u}")
 			}
-			assert.Contains(t, string(outputs), "commit="+gitOutput(dst, "rev-parse", "HEAD")+"\n")
+			head := strings.Fields(runGit(t, headArgs...))
+			if tc.head == "" {
+				require.Len(t, head, 2)
+				assert.Equal(t, "HEAD", head[1])
+			} else {
+				require.Len(t, head, 3)
+				assert.Equal(t, "refs/heads/"+tc.head, head[1])
+				assert.Equal(t, "origin/"+tc.head, head[2])
+			}
+			assert.Contains(t, string(outputs), "commit="+head[0]+"\n")
 			if inputRef := tc.inputs["ref"]; inputRef != "" && inputRef != sha {
 				assert.Contains(t, string(outputs), "ref="+inputRef+"\n")
 			}
-			assert.Equal(t, tc.inputs["sparse-checkout"] != "", gitOutput(dst, "config", "--local", "extensions.worktreeConfig") == "true")
 			persisted := tc.inputs["persist-credentials"] != "false"
 			for _, repo := range repos {
+				var credentialIncludes []string
+				var worktreeConfig string
+				for entry := range strings.SplitSeq(runGit(t, "-C", repo, "config", "--local", "--no-includes", "--null", "--list"), "\x00") {
+					key, value, _ := strings.Cut(entry, "\n")
+					switch key {
+					case "extensions.worktreeconfig":
+						worktreeConfig = value
+					case strings.ToLower(credentialsInclude):
+						credentialIncludes = append(credentialIncludes, value)
+					}
+				}
+				if repo == dst {
+					assert.Equal(t, tc.inputs["sparse-checkout"] != "", strings.TrimSpace(worktreeConfig) == "true")
+				}
 				assert.Equal(t, tc.inputs["clean"] == "false", fileExists(filepath.Join(repo, "untracked")), repo)
-				assert.Len(t, strings.Fields(gitOutput(repo, "config", "--local", "--get-all", credentialsInclude)), 1, repo)
+				assert.Len(t, strings.Fields(strings.Join(credentialIncludes, "\n")), 1, repo)
 				headers, _ := exec.Command("git", "-C", repo, "config", "--get-all", "http."+serverURL+"/.extraheader").Output()
 				assert.Equal(t, persisted, string(headers) == "\nAuthorization: Basic dG9rZW46dG9r\n", repo)
 				assert.Equal(t, persisted, gitOutput(repo, "config", "http."+serverURL+"/.sslcainfo") != "", repo)
@@ -345,15 +365,16 @@ func TestCheckoutTrustsTheRunnerCAAndOffersClientCertOnlyDuringTheStep(t *testin
 
 func publish(t *testing.T, server, name string, files, submodules map[string]string) {
 	work := t.TempDir()
-	runGit(t, "init", "--initial-branch=main", work)
+	runGit(t, "init", "--template=", "--initial-branch=main", work)
 	for file, content := range files {
 		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(work, file)), 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(work, file), []byte(content), 0o644))
 	}
 	runGit(t, "-C", work, "add", ".")
+	var moduleConfig []byte
 	for path, url := range submodules {
-		runGit(t, "-C", work, "config", "-f", ".gitmodules", "submodule."+path+".path", path)
-		runGit(t, "-C", work, "config", "-f", ".gitmodules", "submodule."+path+".url", url)
+		moduleConfig = fmt.Appendf(moduleConfig, "[submodule %q]\n\tpath = %q\n\turl = %q\n", path, path, url)
+		require.NoError(t, os.WriteFile(filepath.Join(work, ".gitmodules"), moduleConfig, 0o644))
 		commit := runGit(t, "--git-dir", filepath.Join(server, name, url), "rev-parse", "main")
 		runGit(t, "-C", work, "update-index", "--add", "--cacheinfo", "160000,"+commit+","+path)
 		runGit(t, "-C", work, "add", ".gitmodules")

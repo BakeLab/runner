@@ -128,6 +128,11 @@ func (*daemonTestService) UpdateLog(_ context.Context, req *runnerv1.UpdateLogRe
 func TestDaemonRetriesDeclareOutagesAndRemovesOnlyConsumedEphemeralRegistration(t *testing.T) {
 	defer func(delay time.Duration) { declareRetryDelay = delay }(declareRetryDelay)
 	declareRetryDelay = 0
+	dir := t.TempDir()
+	regFile := filepath.Join(dir, "registration.json")
+	configFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(configFile, []byte("runner:\n  file: "+regFile+"\n  idle_cleanup_interval: 0s\ncache:\n  enabled: false\n"), 0o600))
+
 	for _, tc := range []struct {
 		name                  string
 		ephemeral, beforeTask bool
@@ -154,10 +159,6 @@ func TestDaemonRetriesDeclareOutagesAndRemovesOnlyConsumedEphemeralRegistration(
 			connecthttp.Mount(mux, rpcServer, connecthttp.WithReadMaxBytes(0))
 			server := httptest.NewServer(http.StripPrefix("/api/actions", mux))
 			defer server.Close()
-			dir := t.TempDir()
-			regFile := filepath.Join(dir, "registration.json")
-			configFile := filepath.Join(dir, "config.yaml")
-			require.NoError(t, os.WriteFile(configFile, []byte("runner:\n  file: "+regFile+"\n  idle_cleanup_interval: 0s\ncache:\n  enabled: false\n"), 0o600))
 			require.NoError(t, config.SaveRegistration(regFile, &config.Registration{Address: server.URL, UUID: "test", Name: "test", Token: "test", Labels: []string{"host:host"}, Ephemeral: tc.ephemeral}))
 			err := runDaemon(ctx, &daemonArgs{Once: true}, &configFile)(nil, nil)
 			if tc.declareErr == nil && tc.fetchErr == nil || tc.beforeTask {

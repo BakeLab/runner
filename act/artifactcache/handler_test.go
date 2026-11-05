@@ -851,6 +851,9 @@ func TestHandler_touchCacheSkipsFreshCompletedEntries(t *testing.T) {
 func newTestHandler(t *testing.T, policy Policy, entries ...*Cache) *Handler {
 	t.Helper()
 	handler := startTestHandler(t, Options{Policy: policy})
+	if len(entries) == 0 {
+		return handler
+	}
 
 	db, err := handler.openDB()
 	require.NoError(t, err)
@@ -940,6 +943,10 @@ func TestHandler_RejectsBearer(t *testing.T) {
 
 func TestHandler_UnregisterRevokes(t *testing.T) {
 	t.Parallel()
+	handler, err := StartHandler(Options{Dir: filepath.Join(t.TempDir(), "artifactcache")})
+	require.NoError(t, err)
+	defer handler.Close()
+
 	for _, tc := range []struct {
 		name          string
 		token         string
@@ -950,9 +957,6 @@ func TestHandler_UnregisterRevokes(t *testing.T) {
 		{"reference counted", "shared", "v", 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			handler, err := StartHandler(Options{Dir: filepath.Join(t.TempDir(), "artifactcache")})
-			require.NoError(t, err)
-			defer handler.Close()
 			revokers := make([]func(), tc.registrations)
 			for i := range revokers {
 				revokers[i] = handler.RegisterJob(tc.token, JobCredential{Repo: testRepo})
@@ -1049,9 +1053,8 @@ func TestHandler_ArtifactSignature(t *testing.T) {
 
 	base := handler.ExternalURL() + apiPath
 	good := signArtifactURL(handler, 1)
-	other, err := StartHandler(Options{Dir: filepath.Join(t.TempDir(), "artifactcache2")})
-	require.NoError(t, err)
-	defer other.Close()
+	secret := bytes.Clone(handler.secret)
+	secret[0] ^= 1
 
 	for _, tc := range []struct {
 		name string
@@ -1060,7 +1063,7 @@ func TestHandler_ArtifactSignature(t *testing.T) {
 		{"missing signature", fmt.Sprintf("%s/artifacts/%d", base, 1)},
 		{"tampered signature", good[:len(good)-4] + "dead"},
 		{"expired signature", handler.signedArtifactURL(JobCredential{}, 1, time.Now().Add(-time.Second))},
-		{"signature from a different server", base + strings.SplitN(signArtifactURL(other, 1), apiPath, 2)[1]},
+		{"signature from a different server", base + strings.SplitN(signArtifactURL(&Handler{secret: secret}, 1), apiPath, 2)[1]},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resp, err := testClient.Get(tc.url)

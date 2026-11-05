@@ -75,40 +75,35 @@ func TestExecuteArgsLoadInputs(t *testing.T) {
 }
 
 func TestExecuteArgsEventJSON(t *testing.T) {
-	payload := func(content string) string {
-		path := filepath.Join(t.TempDir(), "event.json")
-		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-		return path
-	}
-
+	dir := t.TempDir()
 	tests := []struct {
-		name      string
-		eventpath string
-		inputs    []string
-		expected  string
+		name     string
+		payload  string
+		inputs   []string
+		expected string
 	}{
 		{
-			name:      "keeps a payload without inputs to merge",
-			eventpath: payload(`{"inputs": {"kept": "from_event"}}`),
-			expected:  `{"inputs": {"kept": "from_event"}}`,
+			name:     "keeps a payload without inputs to merge",
+			payload:  `{"inputs": {"kept": "from_event"}}`,
+			expected: `{"inputs": {"kept": "from_event"}}`,
 		},
 		{
-			name:      "overrides the event inputs it names, keeping the rest",
-			eventpath: payload(`{"inputs": {"kept": "from_event", "named": "from_event"}}`),
-			inputs:    []string{"named=from_cli"},
-			expected:  `{"inputs": {"kept": "from_event", "named": "from_cli"}}`,
+			name:     "overrides the event inputs it names, keeping the rest",
+			payload:  `{"inputs": {"kept": "from_event", "named": "from_event"}}`,
+			inputs:   []string{"named=from_cli"},
+			expected: `{"inputs": {"kept": "from_event", "named": "from_cli"}}`,
 		},
 		{
-			name:      "adds inputs to a payload carrying none",
-			eventpath: payload(`{"repository": {"name": "test-repo"}}`),
-			inputs:    []string{"flag=val"},
-			expected:  `{"repository": {"name": "test-repo"}, "inputs": {"flag": "val"}}`,
+			name:     "adds inputs to a payload carrying none",
+			payload:  `{"repository": {"name": "test-repo"}}`,
+			inputs:   []string{"flag=val"},
+			expected: `{"repository": {"name": "test-repo"}, "inputs": {"flag": "val"}}`,
 		},
 		{
-			name:      "handles a null payload",
-			eventpath: payload("null"),
-			inputs:    []string{"flag=val"},
-			expected:  `{"inputs": {"flag": "val"}}`,
+			name:     "handles a null payload",
+			payload:  "null",
+			inputs:   []string{"flag=val"},
+			expected: `{"inputs": {"flag": "val"}}`,
 		},
 		{
 			name:     "builds a payload without an event file",
@@ -119,7 +114,12 @@ func TestExecuteArgsEventJSON(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			eventJSON, err := (&executeArgs{eventpath: tt.eventpath, inputs: tt.inputs}).eventJSON()
+			var eventpath string
+			if tt.payload != "" {
+				eventpath = filepath.Join(dir, tt.name+".json")
+				require.NoError(t, os.WriteFile(eventpath, []byte(tt.payload), 0o600))
+			}
+			eventJSON, err := (&executeArgs{eventpath: eventpath, inputs: tt.inputs}).eventJSON()
 			require.NoError(t, err)
 			require.JSONEq(t, tt.expected, eventJSON)
 		})
@@ -275,19 +275,11 @@ func workflowForList(name, file, event, jobID, jobName string) *model.Workflow {
 	return &model.Workflow{
 		Name:  name,
 		File:  file,
-		RawOn: rawOnNode(event),
+		RawOn: yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: event},
 		Jobs: map[string]*model.Job{
 			jobID: {Name: jobName},
 		},
 	}
-}
-
-func rawOnNode(event string) yaml.Node {
-	var node yaml.Node
-	if err := yaml.Unmarshal([]byte(event), &node); err != nil {
-		panic(err)
-	}
-	return *node.Content[0]
 }
 
 func TestExecuteArgsLoadEnvsResultsOrigin(t *testing.T) {

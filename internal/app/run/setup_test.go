@@ -96,6 +96,7 @@ func TestSetupLinesInputs(t *testing.T) {
 }
 
 func TestPrettyOSName(t *testing.T) {
+	dir := t.TempDir()
 	for _, tt := range []struct {
 		name      string
 		osRelease string
@@ -109,7 +110,7 @@ func TestPrettyOSName(t *testing.T) {
 		{"missing file", "", "", true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "os-release")
+			path := filepath.Join(dir, tt.name)
 			if !tt.missing {
 				require.NoError(t, os.WriteFile(path, []byte(tt.osRelease), 0o600))
 			}

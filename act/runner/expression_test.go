@@ -412,11 +412,10 @@ func TestGetEvaluatorInputsBoolean(t *testing.T) {
 	}
 
 	for _, eventName := range []string{"workflow_call", "workflow_dispatch"} {
+		wf, err := model.ReadWorkflow(strings.NewReader(workflow(eventName)))
+		require.NoError(t, err)
 		for _, table := range tables {
 			t.Run(eventName+"/"+table.name, func(t *testing.T) {
-				wf, err := model.ReadWorkflow(strings.NewReader(workflow(eventName)))
-				require.NoError(t, err)
-
 				rc := &RunContext{
 					Config: &Config{Workdir: "."},
 					Run:    &model.Run{JobID: "job1", Workflow: wf},

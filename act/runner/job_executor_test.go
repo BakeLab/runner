@@ -993,6 +993,7 @@ func tarArchive(t *testing.T, entries ...tarEntry) []byte {
 	buf := &bytes.Buffer{}
 	tw := tar.NewWriter(buf)
 	for _, entry := range entries {
+		buf.Grow(len(entry.body) + 3*512)
 		typeflag := entry.typeflag
 		if typeflag == 0 {
 			typeflag = tar.TypeReg
@@ -1009,7 +1010,7 @@ func tarArchive(t *testing.T, entries ...tarEntry) []byte {
 		}
 		require.NoError(t, tw.WriteHeader(header))
 		if typeflag == tar.TypeReg {
-			_, err := tw.Write([]byte(entry.body))
+			_, err := io.CopyN(tw, strings.NewReader(entry.body), int64(len(entry.body)))
 			require.NoError(t, err)
 		}
 	}
@@ -1149,12 +1150,12 @@ func TestTryUploadJobSummaryMasksSecrets(t *testing.T) {
 			}))
 			defer server.Close()
 
-			content, err := testcase.encoding.NewEncoder().Bytes([]byte(testcase.content))
+			content, err := testcase.encoding.NewEncoder().String(testcase.content)
 			require.NoError(t, err)
 			cm := &containerMock{}
 			cm.On("GetContainerArchive", mock.Anything, "/var/run/act/workflow/step-summary-0.md").Return(
 				io.NopCloser(bytes.NewReader(tarArchive(t, tarEntry{
-					name: "step-summary-0.md", body: string(content),
+					name: "step-summary-0.md", body: content,
 				}))),
 				nil,
 			).Once()

@@ -36,7 +36,7 @@ func TestFetchAction(t *testing.T) {
 
 	root := t.TempDir()
 	remote := filepath.Join(root, "org", "action")
-	require.NoError(t, gitCmd("init", "--initial-branch=main", remote))
+	require.NoError(t, os.CopyFS(remote, os.DirFS(filepath.Join(gitFixtureDir, "work"))))
 	require.NoError(t, os.WriteFile(filepath.Join(remote, "action.yml"), []byte("name: action\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(remote, "run.sh"), []byte("#!/bin/sh\n"), 0o755))
 	require.NoError(t, os.Symlink("action.yml", filepath.Join(remote, "link")))
@@ -53,6 +53,7 @@ func TestFetchAction(t *testing.T) {
 	var archiveRequests []http.Header
 	var mirror *httptest.Server
 	archiveCache := map[string][]byte{}
+	revisions := map[string]string{}
 	requests, archives, failures := 0, "", 0
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		mu.Lock()
@@ -79,7 +80,14 @@ func TestFetchAction(t *testing.T) {
 			http.Redirect(writer, request, mirror.URL+request.URL.Path, http.StatusFound)
 			return
 		}
-		sha, _ := gitOutput(request.Context(), remote, "rev-parse", strings.TrimSuffix(ref, ".tar.gz"))
+		sha, ok := revisions[ref]
+		if !ok {
+			var err error
+			sha, err = gitOutput(request.Context(), remote, "rev-parse", strings.TrimSuffix(ref, ".tar.gz"))
+			if err == nil {
+				revisions[ref] = sha
+			}
+		}
 		etag := fmt.Sprintf(`W/"%s-tar.gz-%t"`, sha, archives != "unprefixed")
 		if request.Header.Get("If-None-Match") == etag {
 			writer.WriteHeader(http.StatusNotModified)
@@ -208,6 +216,9 @@ func TestFetchAction(t *testing.T) {
 		require.NoError(t, gitCmd("-C", remote, "commit", "--allow-empty", "-m", "moved"))
 		require.NoError(t, gitCmd("-C", remote, "tag", "--force", "v1"))
 		expectedSha = gitRevParse(t, remote, "v1")
+		mu.Lock()
+		clear(revisions)
+		mu.Unlock()
 		moved, movedSha, err := FetchAction(t.Context(), input)
 		require.NoError(t, err)
 		assert.Equal(t, expectedSha, movedSha)
@@ -253,7 +264,7 @@ func TestFetchAction(t *testing.T) {
 	})
 
 	t.Run("downloads again over a tree whose files changed size or that has no record, not under a job copying it", func(t *testing.T) {
-		sha := gitRevParse(t, remote, "main")
+		sha := expectedSha
 		for _, mode := range []string{"prefixed", "none"} {
 			serve(mode, 0)
 			input := newInput(sha)

@@ -540,6 +540,9 @@ func TestRejectsMissingContainer(t *testing.T) {
 }
 
 func TestPublicCopyPipelineHandlesStaleID(t *testing.T) {
+	source := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(source, "x"), nil, 0o644))
+
 	for _, testcase := range []struct {
 		name, destination, extractionRoot, entry string
 		directory                                bool
@@ -567,8 +570,6 @@ func TestPublicCopyPipelineHandlesStaleID(t *testing.T) {
 
 			cr := &containerReference{id: "stale", cli: client, input: &NewContainerInput{Name: "job-1"}}
 			if testcase.directory {
-				source := t.TempDir()
-				require.NoError(t, os.WriteFile(filepath.Join(source, "x"), nil, 0o644))
 				require.NoError(t, cr.CopyDir(testcase.destination, source+string(filepath.Separator), false, true)(ctx))
 			} else {
 				require.NoError(t, cr.Copy(testcase.destination, &FileEntry{Name: "x", Mode: 0o644})(ctx))
@@ -1108,6 +1109,10 @@ func TestConnectTakesDaemonOSFromPing(t *testing.T) {
 }
 
 func TestContainerCopyModes(t *testing.T) {
+	source := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(source, "run.sh"), []byte("#!/bin/sh\n"), 0o666))
+	require.NoError(t, os.Chmod(filepath.Join(source, "run.sh"), 0o666))
+
 	for _, testcase := range []struct {
 		hostOS, serverOS string
 		expected         int64
@@ -1117,9 +1122,6 @@ func TestContainerCopyModes(t *testing.T) {
 		{"linux", "linux", 0o666},
 	} {
 		t.Run(testcase.hostOS+"-"+testcase.serverOS, func(t *testing.T) {
-			source := t.TempDir()
-			require.NoError(t, os.WriteFile(filepath.Join(source, "run.sh"), []byte("#!/bin/sh\n"), 0o666))
-			require.NoError(t, os.Chmod(filepath.Join(source, "run.sh"), 0o666))
 			file := &FileEntry{Name: "run.sh", Mode: 0o600, Body: "#!/bin/sh\n"}
 			original := hostOS
 			hostOS = testcase.hostOS

@@ -27,16 +27,9 @@ func TestRunPostTaskScriptSkippedWhenEmpty(t *testing.T) {
 	r := &Runner{
 		cfg: &config.Config{},
 	}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	taskCtx, err := structpb.NewStruct(map[string]any{})
-	require.NoError(t, err)
-	task := &runnerv1.Task{Id: 1, Context: taskCtx}
-	reporter := report.NewReporter(ctx, cancel, nil, task, r.cfg)
 
 	require.NotPanics(t, func() {
-		r.runPostTaskScript(ctx, reporter, task, "/workspace/owner/repo")
+		r.runPostTaskScript(t.Context(), nil, nil, "/workspace/owner/repo")
 	})
 }
 
@@ -59,9 +52,7 @@ func TestRunPostTaskScriptNonZeroExitDoesNotPanic(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	taskCtx, err := structpb.NewStruct(map[string]any{})
-	require.NoError(t, err)
-	task := &runnerv1.Task{Id: 1, Context: taskCtx}
+	task := &runnerv1.Task{Id: 1, Context: &structpb.Struct{}}
 	reporter := report.NewReporter(ctx, cancel, nil, task, cfg)
 
 	require.NotPanics(t, func() {
@@ -146,9 +137,7 @@ func TestRunPostTaskScriptIntegration(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	taskCtx, err := structpb.NewStruct(map[string]any{})
-	require.NoError(t, err)
-	task := &runnerv1.Task{Id: 11, Context: taskCtx}
+	task := &runnerv1.Task{Id: 11, Context: &structpb.Struct{}}
 	reporter := report.NewReporter(ctx, cancel, nil, task, cfg)
 	setReporterJobResult(t, reporter, runnerv1.Result_RESULT_SUCCESS)
 

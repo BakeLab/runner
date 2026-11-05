@@ -28,10 +28,12 @@ func gitCmd(t *testing.T, args ...string) {
 }
 
 func TestCollectFilesKeepsWhatGitTracksOrDoesNotIgnore(t *testing.T) {
-	repoDir := filepath.Join(t.TempDir(), "mygitrepo")
-	for _, dir := range []string{repoDir, filepath.Join(repoDir, "sub"), filepath.Join(repoDir, "nested")} {
-		gitCmd(t, "init", "-q", dir)
+	repoDir := t.TempDir()
+	gitCmd(t, "init", "-q", "--template=", repoDir)
+	for _, dir := range []string{"sub", "nested"} {
+		require.NoError(t, os.CopyFS(filepath.Join(repoDir, dir, ".git"), os.DirFS(filepath.Join(repoDir, ".git"))))
 	}
+	require.NoError(t, os.Mkdir(filepath.Join(repoDir, "ign"), 0o755))
 	for name, body := range map[string]string{
 		".gitignore":     ".*\nign/\n",
 		".env":           "",
@@ -43,15 +45,15 @@ func TestCollectFilesKeepsWhatGitTracksOrDoesNotIgnore(t *testing.T) {
 		"sub/kept":       "",
 		"nested/kept":    "",
 	} {
-		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(repoDir, name)), 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(repoDir, name), []byte(body), 0o644))
 	}
 	require.NoError(t, os.Mkdir(filepath.Join(repoDir, "uninitialized"), 0o755))
 	gitCmd(t, "-C", repoDir, "add", "-f", ".gitignore", "Renamed", "ign/tracked")
 	require.NoError(t, os.Rename(filepath.Join(repoDir, "Renamed"), filepath.Join(repoDir, "renamed")))
-	for _, gitlink := range []string{"sub", "uninitialized"} {
-		gitCmd(t, "-C", repoDir, "update-index", "--add", "--cacheinfo", "160000,4b825dc642cb6eb9a060e54bf8d69288fbee4904,"+gitlink)
-	}
+	gitCmd(t, "-C", repoDir, "update-index", "--add",
+		"--cacheinfo", "160000,4b825dc642cb6eb9a060e54bf8d69288fbee4904,sub",
+		"--cacheinfo", "160000,4b825dc642cb6eb9a060e54bf8d69288fbee4904,uninitialized",
+	)
 	expected := map[string]string{".gitignore": "", "ign/tracked": "", "nested/kept": "", "renamed": "", "sub/.gitignore": "", "sub/kept": ""}
 	if runtime.GOOS != "windows" {
 		require.NoError(t, os.Chmod(filepath.Join(repoDir, "renamed"), 0o777|os.ModeSticky))

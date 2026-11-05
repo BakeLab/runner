@@ -6,7 +6,6 @@ package process
 import (
 	"os/exec"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -23,16 +22,13 @@ func TestGroupClosePropagatesToOrphan(t *testing.T) {
 	childPID := ready()
 
 	require.NoError(t, cmd.Wait())
-	require.Eventually(t, func() bool {
-		return !processAlive(cmd.Process.Pid)
-	}, 20*time.Second, 200*time.Millisecond, "the step process should have exited on its own")
+	require.True(t, cmd.ProcessState.Exited(), "the step process should have exited on its own")
 
 	require.True(t, processAlive(childPID), "orphan should outlive its parent")
 
+	waitForExit := newProcessExitWaiter(t, childPID)
 	require.NoError(t, group.Close())
-	require.Eventually(t, func() bool {
-		return !processAlive(childPID)
-	}, 20*time.Second, 200*time.Millisecond, "closing the job must terminate the orphan")
+	waitForExit()
 }
 
 // TestGroupNestsWithKiller: assigned to the group first and the step's Killer
@@ -53,10 +49,9 @@ func TestGroupNestsWithKiller(t *testing.T) {
 	require.NoError(t, err, "the step's job object must nest inside the group's")
 	defer killer.Close()
 
+	waitForExit := newProcessExitWaiter(t, cmd.Process.Pid)
 	require.NoError(t, killer.Kill())
-	require.Eventually(t, func() bool {
-		return !processAlive(cmd.Process.Pid)
-	}, 20*time.Second, 200*time.Millisecond, "cancelling the step should still kill its tree")
+	waitForExit()
 }
 
 // TestGroupNilSafe covers the fallback path: when the job object cannot be

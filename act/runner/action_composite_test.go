@@ -92,7 +92,7 @@ func TestCompositeActionParity(t *testing.T) {
 			return "", "", assert.AnError
 		})
 		rc := &RunContext{
-			Config:       &Config{GitHubInstance: "github.com", ActionCacheDir: t.TempDir(), PresetGitHubContext: &model.GithubContext{}},
+			Config:       &Config{GitHubInstance: "github.com", PresetGitHubContext: &model.GithubContext{}},
 			Run:          &model.Run{JobID: "job", Workflow: &model.Workflow{Jobs: map[string]*model.Job{"job": {}}}},
 			JobContainer: &jobContainerMock{},
 		}
