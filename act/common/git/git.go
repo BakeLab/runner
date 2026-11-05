@@ -185,6 +185,7 @@ type NewGitCloneExecutorInput struct {
 	// For Gitea
 	InsecureSkipTLS               bool
 	ClientCertFile, ClientKeyFile string            // PEM, absolute as git runs in other directories
+	CAFile                        string            // PEM, absolute, replaces git's CA bundle
 	Transport                     http.RoundTripper // for FetchAction's archive downloads, nil for http.DefaultTransport
 }
 
@@ -389,12 +390,16 @@ func RemoteConfig(token string, insecureSkipTLS bool) []string {
 	return config
 }
 
-func ClientCertConfig(prefix, certFile, keyFile, executionOS string) []string {
-	if certFile == "" {
-		return nil
+// SSLConfig uses OpenSSL on Windows, as Schannel takes no PEM key and ignores sslCAInfo.
+func SSLConfig(prefix, certFile, keyFile, caFile, executionOS string) []string {
+	var config []string
+	if certFile != "" {
+		config = append(config, prefix+"sslCert="+certFile, prefix+"sslKey="+keyFile)
 	}
-	config := []string{prefix + "sslCert=" + certFile, prefix + "sslKey=" + keyFile}
-	if strings.EqualFold(executionOS, "windows") {
+	if caFile != "" {
+		config = append(config, prefix+"sslCAInfo="+caFile)
+	}
+	if config != nil && strings.EqualFold(executionOS, "windows") {
 		config = append(config, prefix+"sslBackend=openssl")
 	}
 	return config
@@ -457,7 +462,7 @@ func runGitWithStdin(ctx context.Context, dir string, input *NewGitCloneExecutor
 	config := []string{"core.autocrlf=false", "core.eol=lf"} // keep action files LF
 	if input != nil {
 		config = append(config, RemoteConfig(input.Token, input.InsecureSkipTLS)...)
-		config = append(config, ClientCertConfig("http.", input.ClientCertFile, input.ClientKeyFile, runtime.GOOS)...)
+		config = append(config, SSLConfig("http.", input.ClientCertFile, input.ClientKeyFile, input.CAFile, runtime.GOOS)...)
 	}
 	if dir != "" {
 		args = append([]string{"-C", dir}, args...)

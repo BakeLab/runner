@@ -104,7 +104,8 @@ type Handler struct {
 	stopSync context.CancelFunc
 	syncing  sync.WaitGroup
 
-	outboundIP string
+	outboundIP        string
+	instanceTransport http.RoundTripper
 
 	// internalSecret guards /_internal/{register,revoke}. When set, a remote
 	// runner can use these endpoints to pre-register per-job
@@ -143,19 +144,21 @@ type Options struct {
 	// in-process RegisterJob method directly.
 	InternalSecret string
 
-	Policy Policy
-	Logger *logging.Logger
+	Policy            Policy
+	Logger            *logging.Logger
+	InstanceTransport http.RoundTripper // reaches the instance artifact requests are forwarded to, nil for http.DefaultTransport
 }
 
 // StartHandler starts an embedded cache or forwards cache requests to Upstream.
 func StartHandler(opts Options) (*Handler, error) {
 	dir, logger := opts.Dir, opts.Logger
 	h := &Handler{
-		creds:          make(map[string]*credEntry),
-		internalSecret: opts.InternalSecret,
-		policy:         opts.Policy.withDefaults(),
-		freeDisk:       disk.FreeBytes,
-		dbLock:         make(chan struct{}, 1),
+		creds:             make(map[string]*credEntry),
+		internalSecret:    opts.InternalSecret,
+		policy:            opts.Policy.withDefaults(),
+		freeDisk:          disk.FreeBytes,
+		dbLock:            make(chan struct{}, 1),
+		instanceTransport: opts.InstanceTransport,
 	}
 
 	if logger == nil {

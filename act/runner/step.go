@@ -263,7 +263,7 @@ func setupEnv(ctx context.Context, step step) error {
 
 	env := step.getEnv()
 	// container env is the image's baseline, which job env and $GITHUB_ENV override
-	mergeIntoMap(step, env, rc.containerSpec.Env, rc.GetEnv())
+	mergeIntoMap(step, env, rc.caEnv, rc.containerSpec.Env, rc.GetEnv())
 	rc.withGithubEnv(ctx, getStepGithubContext(ctx, step), *env)
 
 	var err error

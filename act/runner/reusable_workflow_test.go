@@ -130,7 +130,7 @@ func TestNewLocalReusableWorkflowExecutorFindsSameRepositoryPaths(t *testing.T) 
 	}
 }
 
-func TestCloneRemoteReusableWorkflowSendsInstanceTokenAndClientCert(t *testing.T) {
+func TestCloneRemoteReusableWorkflowSendsInstanceTokenAndClientCertTrustingCA(t *testing.T) {
 	var gotCert bool
 	var gotToken string
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -150,12 +150,12 @@ func TestCloneRemoteReusableWorkflowSendsInstanceTokenAndClientCert(t *testing.T
 	require.NoError(t, os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600))
 	rc := &RunContext{
 		Config: &Config{
-			Env:             testCheckoutEnv(),
-			GitHubInstance:  server.URL,
-			Secrets:         map[string]string{"GITEA_TOKEN": "token"},
-			InsecureSkipTLS: true,
-			ClientCertFile:  certFile,
-			ClientKeyFile:   keyFile,
+			Env:            testCheckoutEnv(),
+			GitHubInstance: server.URL,
+			Secrets:        map[string]string{"GITEA_TOKEN": "token"},
+			ClientCertFile: certFile,
+			ClientKeyFile:  keyFile,
+			CAFile:         certFile,
 		},
 		Run: &model.Run{JobID: "j1", Workflow: &model.Workflow{Jobs: map[string]*model.Job{"j1": {}}}},
 	}
@@ -188,11 +188,12 @@ func TestInstanceAuthAndTransportOnlyApplyToTheInstance(t *testing.T) {
 				InsecureSkipTLS:                   true,
 				ClientCertFile:                    "/cert",
 				ClientKeyFile:                     "/key",
+				CAFile:                            "/ca",
 				InstanceTransport:                 &http.Transport{},
 			}
 			want := git.NewGitCloneExecutorInput{URL: tt.cloneURL, InsecureSkipTLS: tt.insecure}
 			if tt.insecure {
-				want.Transport = conf.InstanceTransport
+				want.CAFile, want.Transport = conf.CAFile, conf.InstanceTransport
 			}
 			if tt.token {
 				want.Token = "token"

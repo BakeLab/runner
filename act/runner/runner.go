@@ -83,9 +83,11 @@ type Config struct {
 	InstanceTransport                 http.RoundTripper
 	JobLoggerLevel                    *logging.Level // the level of job logger
 	ValidVolumes                      []string       // only volumes (and bind mounts) in this slice can be mounted on the job container or service containers
+	ContainerVolumes                  []string       // mounted into every job, service and docker action container
 	SharedToolCache                   bool           // one tool cache for all jobs instead of one per job
 	InsecureSkipTLS                   bool           // whether to skip verifying TLS certificate of the Gitea instance
 	ClientCertFile, ClientKeyFile     string         // PEM client certificate for the Gitea instance
+	CAFile                            string         // PEM CA certificates the Gitea instance's certificate chains to
 	MaxParallel                       int            // max parallel jobs to run across all workflows (0 = no limit, uses CPU count)
 	AllocatePTY                       bool           // allocate a pseudo-TTY for each step's process
 	ServiceReadyTimeout               time.Duration  // how long a job waits for its service containers to report healthy (0 uses the default)

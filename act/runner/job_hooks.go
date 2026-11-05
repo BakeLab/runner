@@ -53,7 +53,7 @@ func (rc *RunContext) runJobHook(ctx context.Context, hookPath, name string) err
 	}
 	rawLogger.Infof("::endgroup::")
 
-	env := mergeMaps(rc.containerSpec.Env, rc.GetEnv())
+	env := rc.mergeEnv(rc.caEnv, rc.containerSpec.Env, rc.GetEnv())
 	rc.withGithubEnv(ctx, rc.getGithubContext(ctx), env)
 	rc.ApplyExtraPath(ctx, &env)
 

@@ -133,3 +133,20 @@ func TestFrontResultsService(t *testing.T) {
 		})
 	}
 }
+
+func TestFrontResultsServiceForwardsThroughTheInstanceTransport(t *testing.T) {
+	t.Parallel()
+	gitea := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _request *http.Request) { _, _ = io.WriteString(writer, "{}") }))
+	defer gitea.Close()
+	handler, err := StartHandler(Options{Dir: t.TempDir(), OutboundIP: "127.0.0.1", InstanceTransport: gitea.Client().Transport})
+	require.NoError(t, err)
+	defer handler.Close()
+	defer handler.RegisterJob("token", JobCredential{Results: gitea.URL})()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, handler.ExternalURL()+artifactServicePath+"CreateArtifact", nil)
+	require.NoError(t, err)
+	resp, err := (&http.Client{Transport: &bearerTransport{token: "token"}}).Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+}

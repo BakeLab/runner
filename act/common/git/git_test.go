@@ -54,18 +54,18 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func TestClientCertConfig(t *testing.T) {
+func TestSSLConfig(t *testing.T) {
 	for _, testcase := range []struct {
-		prefix, certFile, executionOS string
-		expected                      []string
+		prefix, certFile, caFile, executionOS string
+		expected                              []string
 	}{
-		{"http.", "cert.pem", "windows", []string{"http.sslCert=cert.pem", "http.sslKey=key.pem", "http.sslBackend=openssl"}},
-		{"http.https://example.com/.", "cert.pem", "Windows", []string{"http.https://example.com/.sslCert=cert.pem", "http.https://example.com/.sslKey=key.pem", "http.https://example.com/.sslBackend=openssl"}},
-		{"http.", "cert.pem", "Linux", []string{"http.sslCert=cert.pem", "http.sslKey=key.pem"}},
-		{"http.", "", "Windows", nil},
+		{"http.https://example.com/.", "cert.pem", "ca.pem", "Windows", []string{"http.https://example.com/.sslCert=cert.pem", "http.https://example.com/.sslKey=key.pem", "http.https://example.com/.sslCAInfo=ca.pem", "http.https://example.com/.sslBackend=openssl"}},
+		{"http.", "", "ca.pem", "windows", []string{"http.sslCAInfo=ca.pem", "http.sslBackend=openssl"}},
+		{"http.", "cert.pem", "ca.pem", "Linux", []string{"http.sslCert=cert.pem", "http.sslKey=key.pem", "http.sslCAInfo=ca.pem"}},
+		{"http.", "", "", "Windows", nil},
 	} {
-		t.Run(testcase.prefix+testcase.certFile+testcase.executionOS, func(t *testing.T) {
-			assert.Equal(t, testcase.expected, ClientCertConfig(testcase.prefix, testcase.certFile, "key.pem", testcase.executionOS))
+		t.Run(testcase.prefix+testcase.certFile+testcase.caFile+testcase.executionOS, func(t *testing.T) {
+			assert.Equal(t, testcase.expected, SSLConfig(testcase.prefix, testcase.certFile, "key.pem", testcase.caFile, testcase.executionOS))
 		})
 	}
 }

@@ -98,18 +98,20 @@ func NewRunner(cfg *config.Config, reg *config.Registration, cli client.Client) 
 	}
 	envs := make(map[string]string, len(cfg.Runner.Envs))
 	maps.Copy(envs, cfg.Runner.Envs)
+	instanceTransport := client.NewTransport(cli.Address(), cfg.Runner.TLSConfig())
 	var cacheHandler *artifactcache.Handler
 	if cfg.Cache.Enabled == nil || *cfg.Cache.Enabled {
 		warnIgnoredCachePolicy(cfg)
 		warnIgnoredCacheSecret(cfg)
 		handler, err := artifactcache.StartHandler(artifactcache.Options{
-			Dir:        cfg.Cache.Dir,
-			OutboundIP: cfg.Cache.Host,
-			Port:       cfg.Cache.Port,
-			Upstream:   cfg.Cache.ExternalServer,
-			S3:         cacheS3(cfg),
-			Policy:     CachePolicy(cfg),
-			Logger:     logging.Default().With("module", "cache_request"),
+			Dir:               cfg.Cache.Dir,
+			OutboundIP:        cfg.Cache.Host,
+			Port:              cfg.Cache.Port,
+			Upstream:          cfg.Cache.ExternalServer,
+			S3:                cacheS3(cfg),
+			Policy:            CachePolicy(cfg),
+			Logger:            logging.Default().With("module", "cache_request"),
+			InstanceTransport: instanceTransport,
 		})
 		if err != nil {
 			logging.Errorf("cannot init cache server, it will be disabled: %v", err)
@@ -140,7 +142,7 @@ func NewRunner(cfg *config.Config, reg *config.Registration, cli client.Client) 
 		runHealthCheck: executeHealthCheck,
 	}
 	runner.isolatedCacheContainer = sync.OnceValue(runner.detectIsolatedCacheContainer)
-	runner.instanceTransport = client.NewTransport(cli.Address(), cfg.Runner.TLSConfig())
+	runner.instanceTransport = instanceTransport
 	return runner
 }
 
@@ -620,10 +622,12 @@ func (r *Runner) run(ctx context.Context, task *runnerv1.Task, reporter *report.
 		JobCompletedHook:                  r.cfg.Runner.Hooks.JobCompleted,
 		Vars:                              task.Vars,
 		ValidVolumes:                      r.cfg.Container.ValidVolumes,
+		ContainerVolumes:                  r.cfg.Container.Volumes,
 		SharedToolCache:                   r.cfg.Runner.ToolCacheMode == config.ToolCacheModeShared,
 		InsecureSkipTLS:                   r.cfg.Runner.Insecure,
 		ClientCertFile:                    r.cfg.Runner.ClientCertFile,
 		ClientKeyFile:                     r.cfg.Runner.ClientKeyFile,
+		CAFile:                            r.cfg.Runner.CAFile,
 		InstanceTransport:                 r.instanceTransport,
 		RunnerName:                        r.name,
 		KubernetesPicker:                  r.kubernetesOptions,

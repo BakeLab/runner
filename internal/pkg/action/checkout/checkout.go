@@ -124,7 +124,7 @@ func Main(ctx context.Context, c *action.Context) (err error) {
 	credentials := fmt.Sprintf("git-credentials-%x.config", digest[:8])
 	co.credentials = container.JoinPath(runnerTemp, credentials)
 	persist := boolInput(c.Inputs, "persist-credentials", true)
-	config, remoteConfig := serverConfig(ghc.ServerURL, cmp.Or(c.Inputs["token"], ghc.Token), c.InsecureSkipTLS, co.submodules != "" && sshKey == "")
+	config, remoteConfig := serverConfig(ghc.ServerURL, append(git.RemoteConfig(cmp.Or(c.Inputs["token"], ghc.Token), c.InsecureSkipTLS), git.SSLConfig("http.", "", "", c.CAFile, executionOS)...), co.submodules != "" && sshKey == "")
 	if boolInput(c.Inputs, "set-safe-directory", true) {
 		remoteConfig = append(remoteConfig, "safe.directory=*") // a bound workdir belongs to the host user
 	}
@@ -145,7 +145,7 @@ func Main(ctx context.Context, c *action.Context) (err error) {
 		if err := c.Container.Copy(runnerTemp, &container.FileEntry{Name: cert, Mode: 0o600, Body: string(certPEM)}, &container.FileEntry{Name: key, Mode: 0o600, Body: string(keyPEM)})(ctx); err != nil {
 			return err
 		}
-		remoteConfig = append(remoteConfig, git.ClientCertConfig("http."+strings.TrimSuffix(ghc.ServerURL, "/")+"/.", container.JoinPath(runnerTemp, cert), container.JoinPath(runnerTemp, key), executionOS)...)
+		remoteConfig = append(remoteConfig, git.SSLConfig("http."+strings.TrimSuffix(ghc.ServerURL, "/")+"/.", container.JoinPath(runnerTemp, cert), container.JoinPath(runnerTemp, key), "", executionOS)...)
 	}
 	env := gitEnv(c, remoteConfig)
 	env["GIT_LFS_SKIP_SMUDGE"] = strconv.FormatBool(!co.lfs || len(co.sparse) == 0) // lfs pull fetches the objects of a full checkout in one go
@@ -265,13 +265,13 @@ func lsRemote(ctx context.Context, c *action.Context, env map[string]string, url
 }
 
 // serverConfig scopes the token to the server, so no other host like a repository's LFS endpoint gets it.
-func serverConfig(serverURL, token string, insecureSkipTLS, rewriteSSH bool) (file string, env []string) {
+func serverConfig(serverURL string, settings []string, rewriteSSH bool) (file string, env []string) {
 	scope := strings.TrimSuffix(serverURL, "/") + "/"
 	file = fmt.Sprintf("[http %q]\n", scope)
-	for _, entry := range git.RemoteConfig(token, insecureSkipTLS) {
+	for _, entry := range settings {
 		setting := strings.TrimPrefix(entry, "http.")
 		key, value, _ := strings.Cut(setting, "=")
-		file += "\t" + key + " = " + value + "\n"
+		file += "\t" + key + " = " + strconv.Quote(value) + "\n"
 		env = append(env, "http."+scope+"."+setting)
 	}
 	if server, err := url.Parse(serverURL); rewriteSSH && err == nil && server.Hostname() != "" { // submodules on the server fetch over HTTP with the token

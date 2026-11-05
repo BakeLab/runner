@@ -5,6 +5,7 @@ package config
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"maps"
@@ -16,7 +17,9 @@ import (
 	"time"
 
 	"gitea.com/gitea/runner/act/common/logging"
+	"gitea.com/gitea/runner/act/container"
 
+	"github.com/docker/go-connections/tlsconfig"
 	"github.com/docker/go-units"
 	"github.com/joho/godotenv"
 	"go.yaml.in/yaml/v4"
@@ -67,6 +70,7 @@ type Runner struct {
 	Insecure              bool              `yaml:"insecure"`                 // Insecure indicates whether the runner operates in an insecure mode.
 	ClientCertFile        string            `yaml:"client_cert_file"`         // ClientCertFile is the PEM certificate presented to a Gitea instance that requires mutual TLS.
 	ClientKeyFile         string            `yaml:"client_key_file"`          // ClientKeyFile is the PEM private key paired with ClientCertFile.
+	CAFile                string            `yaml:"ca_file"`                  // CAFile holds PEM CA certificates trusted for the Gitea instance besides the system's.
 	ExtraHeaders          map[string]string `yaml:"extra_headers"`            // ExtraHeaders adds HTTP headers to runner API requests to Gitea.
 	FetchTimeout          time.Duration     `yaml:"fetch_timeout"`            // FetchTimeout specifies the timeout duration for fetching resources.
 	FetchInterval         time.Duration     `yaml:"fetch_interval"`           // FetchInterval specifies the interval duration for fetching resources.
@@ -90,6 +94,8 @@ type Runner struct {
 	PostTaskScript        string            `yaml:"post_task_script"`         // PostTaskScript is the path to an executable script run on the host after each task's cleanup completes. Empty disables the hook. On Windows use .exe/.bat/.cmd; PowerShell (.ps1) is not supported yet as the configured path.
 	PostTaskScriptTimeout time.Duration     `yaml:"post_task_script_timeout"` // PostTaskScriptTimeout caps how long the post-task script may run. Default is 5m when post_task_script is set.
 	Hooks                 RunnerHooks       `yaml:"hooks"`                    // Hooks are scripts run inside the job environment around the job's steps.
+
+	rootCAs *x509.CertPool // the system's and CAFile's, nil for the system's alone
 }
 
 // RunnerHooks represents the scripts run inside the job environment around the job's steps.
@@ -176,6 +182,7 @@ type Container struct {
 	Options              string                        `yaml:"options"`                // Options specifies additional options for the container.
 	WorkdirParent        string                        `yaml:"workdir_parent"`         // WorkdirParent specifies the parent directory for the container's working directory.
 	ValidVolumes         []string                      `yaml:"valid_volumes"`          // ValidVolumes specifies the volumes (including bind mounts) can be mounted to containers.
+	Volumes              []string                      `yaml:"volumes"`                // Volumes are mounted into every job, service and docker action container.
 	DockerHost           string                        `yaml:"docker_host"`            // DockerHost specifies the Docker host. It overrides the value specified in environment variable DOCKER_HOST.
 	ForcePull            bool                          `yaml:"force_pull"`             // Pull docker image(s) even if already present, except digest-pinned ones. A pull that fails while a local copy exists is a warning, not a job failure.
 	ForceRebuild         bool                          `yaml:"force_rebuild"`          // Rebuild docker image(s) even if already present
@@ -310,6 +317,17 @@ func LoadDefault(file string) (*Config, error) {
 				return nil, err
 			}
 			*file = abs
+		}
+	}
+
+	if cfg.Runner.CAFile != "" {
+		if err := cfg.Runner.loadCAFile(); err != nil {
+			return nil, err
+		}
+	}
+	for _, spec := range cfg.Container.Volumes {
+		if parsed, err := container.ParseVolume(spec); err != nil || parsed.Source == "" {
+			return nil, fmt.Errorf("container.volumes entry %q is not source:target[:options]", spec)
 		}
 	}
 
@@ -465,8 +483,22 @@ func LoadDefault(file string) (*Config, error) {
 	return cfg, nil
 }
 
+func (r *Runner) loadCAFile() error {
+	abs, err := filepath.Abs(r.CAFile) // git resolves a relative path against the repository it runs in
+	if err != nil {
+		return err
+	}
+	r.CAFile = abs
+	tlsConfig, err := tlsconfig.Client(tlsconfig.Options{CAFile: r.CAFile})
+	if err != nil {
+		return fmt.Errorf("load runner CA file: %w", err)
+	}
+	r.rootCAs = tlsConfig.RootCAs
+	return nil
+}
+
 func (r *Runner) TLSConfig() *tls.Config {
-	tlsConfig := &tls.Config{InsecureSkipVerify: r.Insecure}
+	tlsConfig := &tls.Config{InsecureSkipVerify: r.Insecure, RootCAs: r.rootCAs}
 	if r.ClientCertFile != "" {
 		tlsConfig.GetClientCertificate = func(info *tls.CertificateRequestInfo) (*tls.Certificate, error) {
 			pair, err := tls.LoadX509KeyPair(r.ClientCertFile, r.ClientKeyFile) // per handshake, so renewed files apply
