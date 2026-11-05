@@ -23,11 +23,14 @@ depending on the prefix:
   covers both forms: it escapes `%` first, so a literal `%3B` becomes `%253B` that the extra
   `##[…]` rules cannot match, and a raw `;` or `]` is never decoded. It is also what makes
   multi-line work, `\n` becomes `%0A` and the UI turns it back into a line break.
-- **Forwarding a command from step output?** Leave the payload alone, it arrived escaped and is
-  decoded once. Decoding here double-decodes and destroys multi-line.
+- **Forwarding a command from step output?** Preserve its escaping unless masking changes it.
+  Decoding for display happens in the UI.
 - **No prefix?** Do not escape, and split multi-line values into one row each.
-- **Interpolating a secret?** Masking runs after escaping, so `AppendSecretMasker` registers the
-  encoded forms too.
+- **Interpolating a secret?** Masking runs after escaping. Recognised command payloads are
+  normalised before masking to cover partially escaped values. Their original escaping is
+  preserved when no replacement occurs. `AppendSecretMasker` also registers encoded forms for
+  other output. Complete nonblank one-character values are masked, while one-byte fragments
+  of multiline values are skipped.
 - Command *properties* also escape `%3A` and `%2C`, which the UI never decodes, so the command
   handler folds an annotation's location into its decoded message and escapes the result again.
 

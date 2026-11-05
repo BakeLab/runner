@@ -750,8 +750,7 @@ func TestReporter_ParseResult(t *testing.T) {
 func TestReporter_masksEncodedSecrets(t *testing.T) {
 	secret := `p@ss w"rd/1`
 	r := &Reporter{logReplacer: strings.NewReplacer()}
-	r.oldnew = runner.AppendSecretMasker(r.oldnew, secret)
-	r.logReplacer = strings.NewReplacer(r.oldnew...)
+	r.AddMask(secret)
 
 	for _, line := range []string{
 		"token: " + secret,
@@ -762,6 +761,17 @@ func TestReporter_masksEncodedSecrets(t *testing.T) {
 		assert.Contains(t, masked, "***")
 		assert.NotContains(t, masked, secret)
 		assert.NotContains(t, masked, base64.StdEncoding.EncodeToString([]byte(secret)))
+	}
+
+	r.AddMask("alpha beta;gamma]delta")
+	r.AddMask("%")
+	for _, test := range []struct{ line, want string }{
+		{"##[group]alpha beta%3Bgamma%5Ddelta", "##[group]***"},
+		{"##[group]alpha beta%3Bgamma]delta", "##[group]***"},
+		{"%", "***"},
+	} {
+		r.appendLogRow(logRow(logging.Record{Message: test.line}))
+		assert.Equal(t, test.want, r.logRows[len(r.logRows)-1].Content)
 	}
 }
 

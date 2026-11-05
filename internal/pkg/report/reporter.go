@@ -960,7 +960,7 @@ func logRow(entry logging.Record) *runnerv1.LogRow {
 
 // mask repairs the content first, so a secret the repair itself spells out is still caught.
 func (r *Reporter) mask(content string) string {
-	return r.logReplacer.Replace(strings.ToValidUTF8(content, "?"))
+	return runner.MaskLog(strings.ToValidUTF8(content, "?"), r.logReplacer)
 }
 
 // AddMask deliberately leaves the process-wide masker alone. Its entries come from every live

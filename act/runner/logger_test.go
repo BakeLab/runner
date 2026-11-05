@@ -28,6 +28,7 @@ func TestValueMasker(t *testing.T) {
 		secrets    map[string]string
 		masks      []string
 		disallowed []string
+		want       string
 	}{
 		{
 			name:  "Multiline Private Key",
@@ -49,6 +50,60 @@ func TestValueMasker(t *testing.T) {
 			secrets:    map[string]string{"TOKEN": "pass%word"},
 			disallowed: []string{"pass%25word"},
 		},
+		{
+			name:  "one-character mask",
+			lines: "%",
+			masks: []string{"%"},
+			want:  "***",
+		},
+		{
+			name:    "fully escaped legacy secret",
+			lines:   "##[group]alpha beta%3Bgamma%5Ddelta",
+			secrets: map[string]string{"TOKEN": "alpha beta;gamma]delta"},
+			want:    "##[group]***",
+		},
+		{
+			name:  "partially escaped legacy mask",
+			lines: "##[group]alpha beta%3Bgamma]delta",
+			masks: []string{"alpha beta;gamma]delta"},
+			want:  "##[group]***",
+		},
+		{
+			name:  "partially escaped modern mask preserves unrelated escapes",
+			lines: "::group::alpha%25beta%gamma tail%250A%0A",
+			masks: []string{"alpha%beta%gamma"},
+			want:  "::group::*** tail%250A%0A",
+		},
+		{
+			name:  "command escapes are decoded once",
+			lines: "##[group]alpha%253Bbeta%5Dgamma",
+			masks: []string{"alpha;beta]gamma"},
+			want:  "##[group]alpha%253Bbeta%5Dgamma",
+		},
+		{
+			name:  "plain output preserves escapes",
+			lines: "alpha beta%3Bgamma%5Ddelta",
+			masks: []string{"alpha beta;gamma]delta"},
+			want:  "alpha beta%3Bgamma%5Ddelta",
+		},
+		{
+			name:  "command display preserves literal escapes around a mask",
+			lines: "##[command]alpha tail%3Bvalue%5D",
+			masks: []string{"alpha"},
+			want:  "##[command]*** tail%3Bvalue%5D",
+		},
+		{
+			name:  "unknown modern commands preserve literal escapes",
+			lines: "::unknown::alpha tail%25value",
+			masks: []string{"alpha"},
+			want:  "::unknown::*** tail%25value",
+		},
+		{
+			name:  "masks can span command headers and data",
+			lines: "::group::hidden other",
+			masks: []string{"group::hidden", "other"},
+			want:  "::*** ***",
+		},
 	}
 	for _, entry := range table {
 		t.Run(entry.name, func(t *testing.T) {
@@ -56,6 +111,9 @@ func TestValueMasker(t *testing.T) {
 			masker := valueMasker(false, AppendSecretMaskers(nil, entry.secrets))
 			for line := range strings.SplitSeq(entry.lines, "\n") {
 				lentry := masker(ctx, logging.Record{Message: line})
+				if entry.want != "" {
+					assert.Equal(t, entry.want, lentry.Message)
+				}
 				for _, line := range entry.disallowed {
 					assert.NotContains(t, lentry.Message, line)
 				}
@@ -139,6 +197,7 @@ func TestValueMaskerEncodedMasks(t *testing.T) {
 		{"encoded: " + base64.StdEncoding.EncodeToString([]byte(" s3cr3t ")), "encoded: ***"},
 		{"encoded: " + base64.StdEncoding.EncodeToString([]byte("s3cr3t")), "encoded: ***"},
 		{"encoded: " + base64.StdEncoding.EncodeToString([]byte("first")), "encoded: ***"},
+		{"##[group]s3cr3t value\r\n", "##[group]***\r\n"},
 	} {
 		entry := masker(WithMasks(t.Context(), &masks), logging.Record{Message: tc.line})
 		assert.Equal(t, tc.want, entry.Message, tc.line)
@@ -194,17 +253,15 @@ func TestValueMaskerCachedReplacerSeesNewMasks(t *testing.T) {
 }
 
 func TestAppendSecretMaskerSkipsUselessEncodings(t *testing.T) {
-	// A token with no character an escape would touch only gains its base64 forms:
-	// JSON, query and path escaping all leave it unchanged.
 	pairs := AppendSecretMasker(nil, "plaintoken")
 	assert.Equal(t, []string{
 		"plaintoken", "***", "cGxhaW50b2tlbg==", "***", "bGFpbnRva2Vu", "***", "YWludG9rZW4=", "***",
 		"aW50b2tl", "***", "YWludG9r", "***", "bGFpbnRv", "***",
 	}, pairs)
 
-	// Too short to mask.
-	assert.Empty(t, AppendSecretMasker(nil, "x"))
+	assert.Contains(t, AppendSecretMasker(nil, "x"), "x")
 	assert.Empty(t, AppendSecretMasker(nil, " \t"))
+	assert.NotContains(t, AppendSecretMasker(nil, "{\nvalue\n}"), "{")
 	assert.NotContains(t, AppendSecretMasker(nil, `"123456"`), "123456")
 }
 

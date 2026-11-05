@@ -263,29 +263,27 @@ func AppendSecretMaskers(oldnew []string, secrets map[string]string) []string {
 	return oldnew
 }
 
-// AppendSecretMasker registers v and each of its lines, as GitHub does.
+// AppendSecretMasker skips one-byte line fragments to avoid masking punctuation from structured secrets.
 func AppendSecretMasker(oldnew []string, v string) []string {
 	ret := appendMaskedValue(oldnew, v)
 	for l := range strings.FieldsFuncSeq(v, func(r rune) bool { return r == '\r' || r == '\n' }) {
-		ret = appendMaskedValue(ret, strings.TrimSpace(l))
+		if line := strings.TrimSpace(l); len(line) > 1 {
+			ret = appendMaskedValue(ret, line)
+		}
 	}
 	return ret
 }
 
-// appendMaskedValue registers one value and every shape it takes on its way into a log.
 func appendMaskedValue(ret []string, v string) []string {
-	// formatted JSON secrets could otherwise mask {,[,],} everywhere
-	if len(strings.TrimSpace(v)) <= 1 || slices.Contains(ret, v) {
+	if strings.TrimSpace(v) == "" || slices.Contains(ret, v) {
 		return ret
 	}
 	ret = append(ret, v, "***")
-	// command data reaches the log escaped, so "pass%word" also arrives as "pass%25word"
 	if strings.ContainsAny(v, "%\r\n") {
 		ret = append(ret, EscapeCommandData(v), "***")
 	}
 	for _, encode := range secretValueEncoders {
 		encoded := encode(v)
-		// An encoding that leaves the value unchanged is already masked above.
 		if encoded == v || len(encoded) <= 1 || slices.Contains(ret, encoded) {
 			continue
 		}
@@ -319,7 +317,7 @@ func valueMasker(insecureSecrets bool, oldnew []string) entryProcessor {
 		masks := Masks(ctx)
 
 		if len(*masks) == 0 {
-			r.Message = defReplacer.Replace(r.Message)
+			r.Message = MaskLog(r.Message, defReplacer)
 			return r
 		}
 
@@ -339,10 +337,40 @@ func valueMasker(insecureSecrets bool, oldnew []string) entryProcessor {
 		cmasker := replacer
 		mu.Unlock()
 
-		r.Message = cmasker.Replace(r.Message)
+		r.Message = MaskLog(r.Message, cmasker)
 
 		return r
 	}
+}
+
+// MaskLog decodes command data before masking to cover partially escaped values.
+func MaskLog(message string, replacer *strings.Replacer) string {
+	var command, data string
+	var found bool
+	unescape := UnescapeCommandData
+	if strings.HasPrefix(message, "##[") {
+		command, data, found = strings.Cut(message[3:], "]")
+		unescape = UnescapeLegacyCommand
+	} else if strings.HasPrefix(message, "::") {
+		command, data, found = strings.Cut(message[2:], "::")
+		if name, _, properties := strings.Cut(command, " "); properties {
+			switch name {
+			case "error", "warning", "notice", "debug":
+				command = name
+			}
+		}
+	}
+	switch command {
+	case "error", "warning", "notice", "debug", "group", "endgroup", "add-matcher":
+		if found {
+			trimmedData := strings.TrimRight(data, "\r\n")
+			normalized := message[:len(message)-len(data)] + EscapeCommandData(unescape(trimmedData)) + data[len(trimmedData):]
+			if masked := replacer.Replace(normalized); masked != normalized {
+				return masked
+			}
+		}
+	}
+	return replacer.Replace(message)
 }
 
 type maskedHandler struct {

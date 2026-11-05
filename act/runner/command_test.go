@@ -194,6 +194,11 @@ func TestCommandLogWriter(t *testing.T) {
 		masks []string
 	}{
 		{
+			name:  "mask commands decode modern and legacy escapes once",
+			steps: [][]string{{"::add-mask::%25", "##[add-mask]alpha beta%3Bgamma%5Ddelta%250A"}},
+			masks: []string{"%", "alpha beta;gamma]delta%0A"},
+		},
+		{
 			name: "applied commands are hidden unless echoed",
 			steps: [][]string{{
 				"::set-env name=x::y", "::add-path::/bin", "::set-output name=a::b", "##[save-state name=a]b", "::add-matcher::m.json", "::remove-matcher owner=m::",
