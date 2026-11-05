@@ -34,6 +34,13 @@ jobs:
         with:
           go-version-file: "go.mod"
           check-latest: true
+      - name: Import GPG key
+        id: import_gpg
+        uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.PASSPHRASE }}
+          fingerprint: CC64B1DB67ABBEECAB24B6455FC346329753F4B0
       - name: goreleaser
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
         with:
@@ -47,6 +54,7 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           GORELEASER_FORCE_TOKEN: "gitea"
           GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
 
   release-image:
     runs-on: ubuntu-latest
