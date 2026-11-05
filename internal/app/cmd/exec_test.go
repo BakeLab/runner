@@ -5,7 +5,6 @@ package cmd
 
 import (
 	"bytes"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -182,19 +181,18 @@ func TestRunExecListUsesJobEventAndAllPlans(t *testing.T) {
 		},
 	}
 
-	out := captureStdout(t, func() {
-		require.NoError(t, runExecList(planner, &executeArgs{job: "build"}))
-		require.NoError(t, runExecList(planner, &executeArgs{event: "push"}))
-		require.NoError(t, runExecList(planner, &executeArgs{autodetectEvent: true}))
-		require.NoError(t, runExecList(planner, &executeArgs{}))
-		emptyPlanner, err := model.NewWorkflowPlanner(t.TempDir(), false)
-		require.NoError(t, err)
-		require.NoError(t, runExecList(emptyPlanner, &executeArgs{autodetectEvent: true}))
-	})
+	var out bytes.Buffer
+	require.NoError(t, runExecList(&out, planner, &executeArgs{job: "build"}))
+	require.NoError(t, runExecList(&out, planner, &executeArgs{event: "push"}))
+	require.NoError(t, runExecList(&out, planner, &executeArgs{autodetectEvent: true}))
+	require.NoError(t, runExecList(&out, planner, &executeArgs{}))
+	emptyPlanner, err := model.NewWorkflowPlanner(t.TempDir(), false)
+	require.NoError(t, err)
+	require.NoError(t, runExecList(&out, emptyPlanner, &executeArgs{autodetectEvent: true}))
 
-	require.Contains(t, out, "Build")
-	require.Contains(t, out, "Test")
-	require.Contains(t, out, "Lint")
+	require.Contains(t, out.String(), "Build")
+	require.Contains(t, out.String(), "Test")
+	require.Contains(t, out.String(), "Lint")
 	require.Equal(t, []string{"job:build", "event:push", "event:push", "all"}, planner.calls)
 }
 
@@ -208,14 +206,13 @@ func TestPrintListReportsDuplicateJobIDs(t *testing.T) {
 		},
 	}}}
 
-	out := captureStdout(t, func() {
-		printList(plan)
-	})
+	var out bytes.Buffer
+	printList(&out, plan)
 
-	require.Contains(t, out, "Workflow file")
-	require.Contains(t, out, "Build A")
-	require.Contains(t, out, "Build B")
-	require.Contains(t, out, "Detected multiple jobs with the same job name")
+	require.Contains(t, out.String(), "Workflow file")
+	require.Contains(t, out.String(), "Build A")
+	require.Contains(t, out.String(), "Build B")
+	require.Contains(t, out.String(), "Detected multiple jobs with the same job name")
 }
 
 func TestLoadExecCmdDefinesExpectedFlags(t *testing.T) {
@@ -291,26 +288,6 @@ func rawOnNode(event string) yaml.Node {
 		panic(err)
 	}
 	return *node.Content[0]
-}
-
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-
-	old := os.Stdout
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stdout = w
-
-	fn()
-
-	require.NoError(t, w.Close())
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	_, err = io.Copy(&buf, r)
-	require.NoError(t, err)
-	require.NoError(t, r.Close())
-	return buf.String()
 }
 
 func TestExecuteArgsLoadEnvsResultsOrigin(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net"
 	"os"
@@ -228,7 +229,7 @@ func (i *executeArgs) resolve(path string) string {
 	return path
 }
 
-func printList(plan *model.Plan) {
+func printList(out io.Writer, plan *model.Plan) {
 	type lineInfoDef struct {
 		jobID   string
 		jobName string
@@ -288,7 +289,7 @@ func printList(plan *model.Plan) {
 	wfNameMaxWidth += 2
 	wfFileMaxWidth += 2
 
-	fmt.Printf("%*s%*s%*s%*s%*s%*s\n",
+	fmt.Fprintf(out, "%*s%*s%*s%*s%*s%*s\n",
 		-stageMaxWidth, header.stage,
 		-jobIDMaxWidth, header.jobID,
 		-jobNameMaxWidth, header.jobName,
@@ -297,7 +298,7 @@ func printList(plan *model.Plan) {
 		-eventsMaxWidth, header.events,
 	)
 	for _, line := range lineInfos {
-		fmt.Printf("%*s%*s%*s%*s%*s%*s\n",
+		fmt.Fprintf(out, "%*s%*s%*s%*s%*s%*s\n",
 			-stageMaxWidth, line.stage,
 			-jobIDMaxWidth, line.jobID,
 			-jobNameMaxWidth, line.jobName,
@@ -307,11 +308,11 @@ func printList(plan *model.Plan) {
 		)
 	}
 	if duplicateJobIDs {
-		fmt.Print("\nDetected multiple jobs with the same job name, use `-W` to specify the path to the specific workflow.\n")
+		fmt.Fprint(out, "\nDetected multiple jobs with the same job name, use `-W` to specify the path to the specific workflow.\n")
 	}
 }
 
-func runExecList(planner model.WorkflowPlanner, execArgs *executeArgs) error {
+func runExecList(out io.Writer, planner model.WorkflowPlanner, execArgs *executeArgs) error {
 	// plan with filtered jobs - to be used for filtering only
 	var filterPlan *model.Plan
 
@@ -347,7 +348,7 @@ func runExecList(planner model.WorkflowPlanner, execArgs *executeArgs) error {
 		return err
 	}
 
-	printList(filterPlan)
+	printList(out, filterPlan)
 
 	return nil
 }
@@ -405,7 +406,7 @@ func runExec(ctx context.Context, execArgs *executeArgs) func(cmd *cobra.Command
 		}
 
 		if execArgs.runList {
-			return runExecList(planner, execArgs)
+			return runExecList(cmd.OutOrStdout(), planner, execArgs)
 		}
 
 		// plan with triggered jobs
