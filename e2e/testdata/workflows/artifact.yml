@@ -58,3 +58,20 @@ jobs:
         with:
           name: report.txt
       - run: grep -q raw report.txt
+  builtin-downloads-js:
+    needs: upload
+    runs-on: e2e-artifact
+    steps:
+      - id: own
+        uses: builtin:download-artifact
+        with:
+          name: e2e-artifact-${{ github.run_id }}
+          path: got
+      - run: grep -q artifact-payload got/data.txt && test "${{ steps.own.outputs.download-path }}" = "$GITHUB_WORKSPACE/got"
+      - uses: builtin:download-artifact
+        with:
+          name: e2e-artifact-${{ github.run_id }}
+          path: rest
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - run: grep -q artifact-payload rest/data.txt

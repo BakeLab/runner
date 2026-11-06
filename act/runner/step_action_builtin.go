@@ -12,14 +12,16 @@ import (
 	"gitea.com/gitea/runner/act/common"
 	"gitea.com/gitea/runner/internal/pkg/action"
 	"gitea.com/gitea/runner/internal/pkg/action/checkout"
+	"gitea.com/gitea/runner/internal/pkg/action/downloadartifact"
 	"gitea.com/gitea/runner/internal/pkg/action/uploadartifact"
 
 	"gitea.dev/actionslib/pkg/model"
 )
 
 var builtinActions = map[string]func(context.Context, *action.Context) error{
-	"checkout":        checkout.Main,
-	"upload-artifact": uploadartifact.Main,
+	"checkout":          checkout.Main,
+	"download-artifact": downloadartifact.Main,
+	"upload-artifact":   uploadartifact.Main,
 }
 
 type stepActionBuiltin struct {

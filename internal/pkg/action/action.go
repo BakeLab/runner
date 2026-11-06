@@ -103,6 +103,13 @@ func (c *Context) Windows() bool {
 	return c.Host() && runtime.GOOS == "windows"
 }
 
+func (c *Context) Join(elem ...string) string {
+	if c.Windows() {
+		return filepath.Join(elem...)
+	}
+	return path.Join(elem...)
+}
+
 func (c *Context) Dir(p string) string {
 	if c.Windows() {
 		return filepath.Dir(p)
@@ -115,6 +122,13 @@ func (c *Context) Base(p string) string {
 		return filepath.Base(p)
 	}
 	return path.Base(p)
+}
+
+func (c *Context) Resolve(p string) string {
+	if c.Windows() && filepath.IsAbs(p) || !c.Windows() && path.IsAbs(p) {
+		return c.Join(p)
+	}
+	return c.Join(c.Workspace, p)
 }
 
 // Home is the job user's home directory, what os.homedir() returns to a JavaScript action.
