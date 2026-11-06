@@ -82,3 +82,7 @@ func (cm *containerMock) Inspect(ctx context.Context) (*container.Info, error) {
 	err, _ := args.Get(1).(error)
 	return info, err
 }
+
+func (cm *containerMock) CopyTarStream(ctx context.Context, destPath string, write func(*container.TarWriter) error) error {
+	return cm.Called(ctx, destPath, write).Error(0)
+}

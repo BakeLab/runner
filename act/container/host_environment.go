@@ -6,7 +6,6 @@ package container
 
 import (
 	"archive/tar"
-	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -17,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -117,17 +117,24 @@ func (e *HostEnvironment) Inspect(_ context.Context) (*Info, error) {
 }
 
 func (e *HostEnvironment) GetContainerArchive(ctx context.Context, srcPath string) (io.ReadCloser, error) {
-	buf := &bytes.Buffer{}
-	tw := tar.NewWriter(buf)
-	defer tw.Close()
 	srcPath = filepath.Clean(srcPath)
 	fi, err := os.Lstat(srcPath)
 	if err != nil {
 		return nil, err
 	}
-	tc := &filecollector.TarCollector{
-		TarWriter: tw,
-	}
+	reader, writer := io.Pipe()
+	go func() {
+		tw := tar.NewWriter(writer)
+		err := writeHostArchive(ctx, &filecollector.TarCollector{TarWriter: tw}, srcPath, fi)
+		if err == nil {
+			err = tw.Close()
+		}
+		writer.CloseWithError(err)
+	}()
+	return startedArchive(reader)
+}
+
+func writeHostArchive(ctx context.Context, tc *filecollector.TarCollector, srcPath string, fi fs.FileInfo) error {
 	if fi.IsDir() {
 		srcPrefix := srcPath
 		if !strings.HasSuffix(srcPrefix, string(filepath.Separator)) {
@@ -138,31 +145,74 @@ func (e *HostEnvironment) GetContainerArchive(ctx context.Context, srcPath strin
 			SrcPrefix: srcPrefix,
 			Handler:   tc,
 		}
-		err = filepath.Walk(srcPath, fc.CollectFiles(ctx))
-		if err != nil {
-			return nil, err
+		return filepath.Walk(srcPath, fc.CollectFiles(ctx))
+	}
+	var f io.ReadCloser
+	var linkname string
+	var err error
+	if fi.Mode()&fs.ModeSymlink != 0 {
+		if linkname, err = os.Readlink(srcPath); err != nil {
+			return err
 		}
 	} else {
-		var f io.ReadCloser
-		var linkname string
-		if fi.Mode()&fs.ModeSymlink != 0 {
-			linkname, err = os.Readlink(srcPath)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			f, err = os.Open(srcPath)
-			if err != nil {
-				return nil, err
-			}
-			defer f.Close()
+		if f, err = os.Open(srcPath); err != nil {
+			return err
 		}
-		err := tc.WriteFile(fi.Name(), fi, linkname, f)
+		defer f.Close()
+	}
+	return tc.WriteFile(fi.Name(), fi, linkname, f)
+}
+
+func (e *HostEnvironment) CopyTarStream(ctx context.Context, destPath string, write func(*TarWriter) error) error {
+	if err := os.MkdirAll(destPath, 0o777); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(destPath)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	content := pipeTar(0, 0, "", nil, write)
+	defer content.Close()
+	tr := tar.NewReader(content)
+	var dirs []*tar.Header
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			return err
+		}
+		hdr.Name = filepath.FromSlash(strings.TrimSuffix(hdr.Name, "/"))
+		if hdr.Typeflag == tar.TypeDir {
+			err = root.MkdirAll(hdr.Name, 0o777) // modes apply after the contents, so read-only directories can be filled
+			dirs = append(dirs, hdr)
+		} else {
+			err = writeRootFile(root, hdr.Name, hdr.FileInfo().Mode().Perm(), tr)
+		}
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return io.NopCloser(buf), nil
+	for _, dir := range slices.Backward(dirs) {
+		if err := root.Chmod(dir.Name, dir.FileInfo().Mode().Perm()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeRootFile(root *os.Root, name string, mode fs.FileMode, body io.Reader) error {
+	_ = root.Remove(name) // replaces read-only files and applies mode, as the daemon and tar do
+	file, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(file, body)
+	return errors.Join(err, file.Close())
 }
 
 func (e *HostEnvironment) Pull(_ bool) common.Executor {

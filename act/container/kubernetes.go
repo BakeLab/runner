@@ -4,7 +4,6 @@
 package container
 
 import (
-	"bufio"
 	"bytes"
 	"cmp"
 	"compress/gzip"
@@ -554,6 +553,10 @@ func (c *kubernetesContainer) Copy(destPath string, files ...*FileEntry) common.
 	}
 }
 
+func (c *kubernetesContainer) CopyTarStream(ctx context.Context, destPath string, write func(*TarWriter) error) error {
+	return c.extract(ctx, destPath, true, func(writer io.Writer) error { return writeTarStream(writer, 0, 0, "", nil, write) }) // streams carry large content like artifacts
+}
+
 func (c *kubernetesContainer) CopyDir(destPath, srcPath string, useGitIgnore, skipGitDir bool) common.Executor {
 	return func(ctx context.Context) error {
 		return c.extract(ctx, destPath, true, func(writer io.Writer) error { // directories are actions and workspaces, megabytes of compressible sources
@@ -573,15 +576,7 @@ func (c *kubernetesContainer) GetContainerArchive(ctx context.Context, srcPath s
 		}
 		writer.CloseWithError(err)
 	}()
-	buffered := bufio.NewReader(reader)
-	if _, err := buffered.Peek(1); err != nil {
-		reader.Close()
-		return nil, err
-	}
-	return struct {
-		io.Reader
-		io.Closer
-	}{buffered, reader}, nil
+	return startedArchive(reader)
 }
 
 func (c *kubernetesContainer) UpdateFromEnv(srcPath string, env *map[string]string) common.Executor {

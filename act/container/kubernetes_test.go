@@ -309,6 +309,18 @@ func TestKubernetesPodRunsJobThroughAPI(t *testing.T) {
 	assert.Contains(t, lastExec(), "command="+url.QueryEscape(workdir+"/act/actions/sha/"))
 	assert.Contains(t, lastExec(), url.QueryEscape("gzip -dc |"))
 
+	require.NoError(t, job.CopyTarStream(ctx, workdir+"/download/new", func(tw *TarWriter) error {
+		if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: "dir/data.txt", Mode: 0o644, Size: 7}); err != nil {
+			return err
+		}
+		_, err := tw.Write([]byte("payload"))
+		return err
+	}))
+	downloaded, err := os.ReadFile(workdir + "/download/new/dir/data.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "payload", string(downloaded))
+	assert.Contains(t, lastExec(), url.QueryEscape("gzip -dc |"))
+
 	pathEnv := map[string]string{}
 	require.NoError(t, job.UpdateFromImageEnv(&pathEnv)(ctx))
 	assert.Equal(t, path, pathEnv["PATH"])

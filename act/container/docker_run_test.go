@@ -122,6 +122,11 @@ func (m *mockDockerClient) CopyToContainer(ctx context.Context, id string, optio
 	return args.Get(0).(mobyclient.CopyToContainerResult), args.Error(1)
 }
 
+func (m *mockDockerClient) ContainerStatPath(ctx context.Context, id string, options mobyclient.ContainerStatPathOptions) (mobyclient.ContainerStatPathResult, error) {
+	args := m.Called(ctx, id, options)
+	return args.Get(0).(mobyclient.ContainerStatPathResult), args.Error(1)
+}
+
 func (m *mockDockerClient) ContainerInspect(ctx context.Context, id string, opts mobyclient.ContainerInspectOptions) (mobyclient.ContainerInspectResult, error) {
 	args := m.Called(ctx, id, opts)
 	return args.Get(0).(mobyclient.ContainerInspectResult), args.Error(1)
@@ -537,6 +542,46 @@ func TestRejectsMissingContainer(t *testing.T) {
 	removed := &containerReference{id: "gone", cli: client, input: &NewContainerInput{Name: "job-1"}}
 	_, err = removed.Inspect(ctx)
 	check("Inspect after removal", err)
+}
+
+func TestCopyTarStreamOwnsMissingParentsAndRejectsEscapes(t *testing.T) {
+	ctx := t.Context()
+	client := &mockDockerClient{}
+	client.On("ContainerInspect", ctx, "job", mobyclient.ContainerInspectOptions{}).
+		Return(mobyclient.ContainerInspectResult{Container: container.InspectResponse{ID: "job", Name: "/job"}}, nil)
+	stat := func(p string, err error) {
+		client.On("ContainerStatPath", ctx, "job", mobyclient.ContainerStatPathOptions{Path: p}).
+			Return(mobyclient.ContainerStatPathResult{}, err).Once()
+	}
+	stat("/w/out/a", cerrdefs.ErrNotFound)
+	stat("/w/out", cerrdefs.ErrNotFound)
+	stat("/w", nil)
+	var entries []string
+	client.On("CopyToContainer", ctx, "job", mock.Anything).Run(func(args mock.Arguments) {
+		opts := args.Get(2).(mobyclient.CopyToContainerOptions)
+		assert.Equal(t, "/", opts.DestinationPath)
+		reader := tar.NewReader(opts.Content)
+		for {
+			header, err := reader.Next()
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, []any{1001, 1002, ""}, []any{header.Uid, header.Gid, header.Uname}, header.Name)
+			entries = append(entries, header.Name)
+		}
+	}).Return(mobyclient.CopyToContainerResult{}, nil).Once()
+
+	cr := &containerReference{id: "job", cli: client, input: &NewContainerInput{Name: "job"}, UID: 1001, GID: 1002}
+	require.NoError(t, cr.CopyTarStream(ctx, "/w/out/a/", func(tw *TarWriter) error {
+		return tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: "dir/f.txt", Mode: 0o644, Uname: "nobody"})
+	}))
+	assert.Equal(t, []string{"w/out/", "w/out/a/", "w/out/a/dir/", "w/out/a/dir/f.txt"}, entries)
+	client.AssertExpectations(t)
+
+	require.ErrorContains(t, writeTarStream(io.Discard, 0, 0, "w/out/a", nil, func(tw *TarWriter) error {
+		return tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: "../../../etc/passwd"})
+	}), "escapes")
 }
 
 func TestPublicCopyPipelineHandlesStaleID(t *testing.T) {
