@@ -118,7 +118,11 @@ func (rc *RunContext) commandHandler(ctx context.Context) common.LineHandler {
 			rawLogger.Infof("%s", formatAnnotation(command, kvPairs, arg))
 			return false
 		case "group", "endgroup":
-			return true
+			if strings.HasPrefix(line, "::"+command+"::") || strings.HasPrefix(line, "##["+command+"]") {
+				return true
+			}
+			rawLogger.Infof("::%s::%s", command, EscapeCommandData(arg))
+			return false
 		}
 		return echoed
 	}

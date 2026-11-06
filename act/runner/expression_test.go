@@ -178,7 +178,7 @@ func (c *hashFilesContainer) ReplaceLogWriter(stdout, stderr io.Writer) (io.Writ
 }
 
 func TestGetHashFilesFunction(t *testing.T) {
-	const failureMessage = "hashFiles('dir''file, *.sum') failed. Fail to hash files under directory '/workspace'"
+	const failureMessage = "hashFiles('dir''file, *.sum, 123, true, ') failed. Fail to hash files under directory '/workspace'"
 	for _, test := range []struct {
 		name    string
 		output  string
@@ -192,7 +192,7 @@ func TestGetHashFilesFunction(t *testing.T) {
 		{name: "success", output: "patterns __OUTPUT__wrong__OUTPUT__ echoed\n__OUTPUT__digest__OUTPUT__", hash: "digest"},
 		{name: "no matches", output: "__OUTPUT____OUTPUT__"},
 		{name: "script failure", output: "Cannot find: node in PATH\n__OUTPUT__digest__OUTPUT__", execErr: container.ExitCodeError(1), err: failureMessage},
-		{name: "timeout", execErr: context.DeadlineExceeded, err: "hashFiles('dir''file, *.sum') couldn't finish within 120 seconds"},
+		{name: "timeout", execErr: context.DeadlineExceeded, err: "hashFiles('dir''file, *.sum, 123, true, ') couldn't finish within 120 seconds"},
 		{name: "job deadline", execErr: context.DeadlineExceeded, expired: true, err: context.DeadlineExceeded.Error()},
 		{name: "node missing", execErr: fmt.Errorf("wrapped: %w", container.ExitCodeError(127)), warning: true},
 		{name: "node not executable", execErr: container.ExitCodeError(126), warning: true},
@@ -205,7 +205,7 @@ func TestGetHashFilesFunction(t *testing.T) {
 			jobContainer := &hashFilesContainer{stdout: stdout, stderr: stderr, copyErr: test.copyErr}
 			jobContainer.execute = func(command []string, env map[string]string, user, workdir string) common.Executor {
 				assert.Equal(t, []string{"node", "/var/run/act/workflow/hashfiles/index.js"}, command)
-				assert.Equal(t, map[string]string{"patterns": "dir'file\n*.sum", "followSymbolicLinks": "true"}, env)
+				assert.Equal(t, map[string]string{"patterns": "dir'file\n*.sum\n123\ntrue\n", "followSymbolicLinks": "true"}, env)
 				assert.Empty(t, user)
 				assert.Empty(t, workdir)
 				return func(_ctx context.Context) error {
@@ -223,7 +223,7 @@ func TestGetHashFilesFunction(t *testing.T) {
 			result, err := getHashFilesFunction(ctx, &RunContext{
 				Config:       &Config{Workdir: "/workspace"},
 				JobContainer: jobContainer,
-			})([]reflect.Value{reflect.ValueOf("--follow-symbolic-links"), reflect.ValueOf("dir'file"), reflect.ValueOf("*.sum")})
+			})([]reflect.Value{reflect.ValueOf("--follow-symbolic-links"), reflect.ValueOf("dir'file"), reflect.ValueOf("*.sum"), reflect.ValueOf(float64(123)), reflect.ValueOf(true), {}})
 			if test.err == "" {
 				require.NoError(t, err)
 			} else {

@@ -241,9 +241,22 @@ func TestCommandLogWriter(t *testing.T) {
 			},
 		},
 		{
+			name: "groups normalize unsupported prefixes and preserve recognized prefixes",
+			steps: [][]string{{
+				"::group::a%3Bb%5Dc%250A", "::endgroup::", "##[group]a%3Bb%5Dc%250A", "##[endgroup]",
+				"::GrOuP::a%25b%0Ac", "::EnDgRoUp::", " \t::group::indented", " \t::endgroup::",
+				"prefix ##[GrOuP]a%3Bb%5Dc%253B%0A", "prefix ##[EnDgRoUp]",
+			}},
+			log: []string{
+				"::group::a%3Bb%5Dc%250A", "::endgroup::", "##[group]a%3Bb%5Dc%250A", "##[endgroup]",
+				"::group::a%25b%0Ac", "::endgroup::", "::group::indented", "::endgroup::",
+				"::group::a;b]c%253B%0A", "::endgroup::",
+			},
+		},
+		{
 			name:  "stop-commands keeps lines verbatim until resumed",
-			steps: [][]string{{"::stop-commands::resume-token", "::add-mask::kept", "::set-output name=a::b", "::RESUME-TOKEN::", "::add-mask::masked"}},
-			log:   []string{"::stop-commands::resume-token", "::add-mask::kept", "::set-output name=a::b", "::RESUME-TOKEN::"},
+			steps: [][]string{{"::stop-commands::resume-token", "::add-mask::kept", "::set-output name=a::b", " \t::GrOuP::kept%3B", "prefix ##[EnDgRoUp]", "::RESUME-TOKEN::", "::add-mask::masked"}},
+			log:   []string{"::stop-commands::resume-token", "::add-mask::kept", "::set-output name=a::b", " \t::GrOuP::kept%3B", "prefix ##[EnDgRoUp]", "::RESUME-TOKEN::"},
 			masks: []string{"resume-token", "masked"},
 		},
 		{

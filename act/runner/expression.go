@@ -136,7 +136,7 @@ func getHashFilesFunction(ctx context.Context, rc *RunContext) func(v []reflect.
 			followSymlink := false
 
 			for i, p := range v {
-				s := p.String()
+				s := exprparser.CoerceToString(p)
 				if i == 0 && strings.HasPrefix(s, "--") {
 					if strings.EqualFold(s, "--follow-symbolic-links") {
 						followSymlink = true
