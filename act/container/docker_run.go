@@ -146,6 +146,47 @@ func (cr *containerReference) CopyDir(destPath, srcPath string, useGitIgnore, sk
 	).IfNot(common.Dryrun)
 }
 
+func (cr *containerReference) ExecOutput(ctx context.Context, command []string) (io.ReadCloser, error) {
+	if common.Dryrun(ctx) {
+		return nil, errors.New("DRYRUN is not supported in ExecOutput")
+	}
+	if err := cr.connect()(ctx); err != nil {
+		return nil, err
+	}
+	if err := cr.find()(ctx); err != nil {
+		return nil, err
+	}
+	if cr.id == "" {
+		return nil, cr.missingContainerError("exec %v", command)
+	}
+	return streamOutput(ctx, func(ctx context.Context, stdout, stderr io.Writer) error {
+		created, err := cr.cli.ExecCreate(ctx, cr.id, client.ExecCreateOptions{
+			Cmd: command, AttachStdout: true, AttachStderr: true,
+		})
+		if err != nil {
+			return err
+		}
+		attached, err := cr.cli.ExecAttach(ctx, created.ID, client.ExecAttachOptions{})
+		if err != nil {
+			return err
+		}
+		defer attached.Close()
+		stop := context.AfterFunc(ctx, func() { attached.Close() })
+		defer stop()
+		if _, err := stdcopy.StdCopy(stdout, stderr, attached.Reader); err != nil {
+			return err
+		}
+		inspected, err := cr.cli.ExecInspect(ctx, created.ID, client.ExecInspectOptions{})
+		if err != nil {
+			return err
+		}
+		if inspected.ExitCode != 0 {
+			return ExitCodeError(inspected.ExitCode)
+		}
+		return nil
+	}), nil
+}
+
 func (cr *containerReference) GetContainerArchive(ctx context.Context, srcPath string) (io.ReadCloser, error) {
 	if common.Dryrun(ctx) {
 		return nil, errors.New("DRYRUN is not supported in GetContainerArchive")

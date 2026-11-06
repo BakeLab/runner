@@ -116,6 +116,20 @@ func (e *HostEnvironment) Inspect(_ context.Context) (*Info, error) {
 	return &Info{Health: HealthNone, Ports: map[string]string{}}, nil
 }
 
+func (e *HostEnvironment) ExecOutput(ctx context.Context, command []string) (io.ReadCloser, error) {
+	return streamOutput(ctx, func(ctx context.Context, stdout, stderr io.Writer) error {
+		cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+		cmd.Dir, cmd.Stdout, cmd.Stderr = e.Workdir, stdout, stderr
+		if err := cmd.Run(); err != nil {
+			if exit, ok := errors.AsType[*exec.ExitError](err); ok {
+				return ExitCodeError(exit.ExitCode())
+			}
+			return err
+		}
+		return nil
+	}), nil
+}
+
 func (e *HostEnvironment) GetContainerArchive(ctx context.Context, srcPath string) (io.ReadCloser, error) {
 	srcPath = filepath.Clean(srcPath)
 	fi, err := os.Lstat(srcPath)

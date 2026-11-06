@@ -260,6 +260,28 @@ func TestDockerExecFailure(t *testing.T) {
 	assert.Equal(t, ExitCodeError(1), exitErr)
 	assert.Equal(t, "Process completed with exit code 1.", err.Error())
 
+	client.On("ContainerInspect", ctx, "123", mobyclient.ContainerInspectOptions{}).
+		Return(mobyclient.ContainerInspectResult{}, nil)
+	client.On("ExecCreate", mock.Anything, "123", mobyclient.ExecCreateOptions{
+		Cmd: []string{"printf", `a\b`}, AttachStdout: true, AttachStderr: true,
+	}).Return(mobyclient.ExecCreateResult{ID: "output"}, nil)
+	client.On("ExecAttach", mock.Anything, "output", mobyclient.ExecAttachOptions{}).
+		Return(mobyclient.ExecAttachResult{
+			Conn:   &mockConn{},
+			Reader: bufio.NewReader(bytes.NewReader(append(stdcopyFrame(stdcopy.Stdout, "a\x00b"), stdcopyFrame(stdcopy.Stderr, " failed \n")...))),
+		}, nil)
+	client.On("ExecInspect", mock.Anything, "output", mobyclient.ExecInspectOptions{}).
+		Return(mobyclient.ExecInspectResult{ExitCode: 3}, nil)
+	output, err := cr.ExecOutput(ctx, []string{"printf", `a\b`})
+	require.NoError(t, err)
+	content, err := io.ReadAll(output)
+	require.ErrorAs(t, err, &exitErr)
+	assert.Equal(t, ExitCodeError(3), exitErr)
+	assert.Equal(t, "Process completed with exit code 3.: failed", err.Error())
+	assert.Equal(t, "a\x00b", string(content))
+	require.ErrorAs(t, output.Close(), &exitErr)
+	assert.Equal(t, ExitCodeError(3), exitErr)
+
 	client.AssertExpectations(t)
 }
 
@@ -533,6 +555,8 @@ func TestRejectsMissingContainer(t *testing.T) {
 	check("exec", cr.exec([]string{"echo"}, nil, "", "")(ctx))
 	_, err := cr.GetContainerArchive(ctx, "/var/run/act/x")
 	check("GetContainerArchive", err)
+	_, err = cr.ExecOutput(ctx, []string{"true"})
+	check("ExecOutput", err)
 	_, err = cr.Inspect(ctx)
 	check("Inspect", err)
 

@@ -66,6 +66,12 @@ func (cm *containerMock) Exec(command []string, env map[string]string, user, wor
 	return cm.Called(command, env, user, workdir).Get(0).(func(context.Context) error)
 }
 
+func (cm *containerMock) ExecOutput(ctx context.Context, command []string) (io.ReadCloser, error) {
+	args := cm.Called(ctx, command)
+	output, _ := args.Get(0).(io.ReadCloser)
+	return output, args.Error(1)
+}
+
 func (cm *containerMock) GetContainerArchive(ctx context.Context, srcPath string) (io.ReadCloser, error) {
 	args := cm.Called(ctx, srcPath)
 	err, _ := args.Get(1).(error)

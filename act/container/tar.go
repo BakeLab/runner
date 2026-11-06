@@ -86,7 +86,7 @@ func pipeTar(uid, gid int, prefix string, parents []string, write func(*TarWrite
 }
 
 // startedArchive returns reader once its first byte arrives, so failing to start archiving errors here, not on read.
-func startedArchive(reader *io.PipeReader) (io.ReadCloser, error) {
+func startedArchive(reader io.ReadCloser) (io.ReadCloser, error) {
 	buffered := bufio.NewReader(reader)
 	if _, err := buffered.Peek(1); err != nil {
 		reader.Close()

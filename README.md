@@ -247,7 +247,7 @@ Set `container.sweep: true` to remove the containers, networks and volumes most 
 
 ### Built-in actions (`uses: builtin:<name>`)
 
-`uses: builtin:checkout` checks out a repository without downloading `actions/checkout` or needing Node in the job image, see [docs/builtin-actions.md](docs/builtin-actions.md).
+`uses: builtin:checkout` and `builtin:upload-artifact` replace their `actions/` counterparts without an action download or Node in the job image, see [docs/builtin-actions.md](docs/builtin-actions.md).
 
 ### Caching (`actions/cache`)
 

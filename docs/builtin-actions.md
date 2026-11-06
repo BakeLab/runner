@@ -4,6 +4,7 @@ Built-in actions ship with the runner, so a job needs no action download and no 
 
 ```yaml
 - uses: builtin:checkout
+- uses: builtin:upload-artifact
 ```
 
 ## checkout
@@ -37,3 +38,24 @@ A branch is checked out as a local branch tracking `origin`, a tag or commit as 
 Persisted credentials end with the job. `token` is only sent to `github.server_url`, while `ssh-key` is offered to any SSH host, as with `actions/checkout`. The runner's `client_cert_file` is only offered to `github.server_url` and only during the step, so later steps do not get it. Its `ca_file` replaces the job image's CA bundle for `github.server_url`, in later steps too when credentials persist. Without `ssh-key`, submodule URLs of the form `git@<server host>:` are fetched from `github.server_url` with `token`. With `ssh-key`, the repository is fetched from the SSH URL in the event's `repository.ssh_url`, or from the server's host on port 22.
 
 With `gitea-runner exec`, checking out the workflow's own repository copies your local working directory, unless `--no-skip-checkout` or `ssh-key` is set.
+
+## upload-artifact
+
+Works like `actions/upload-artifact` v7 with these inputs. Any other input logs a warning, as on GitHub. It needs Gitea 1.22.4 or later, and 1.26 for `archive: false`.
+
+| Input | Default |
+| --- | --- |
+| `name` | `artifact`, ignored with `archive: false`, which names the artifact after the file |
+| `path` | required, files, directories or patterns, one per line, `!` excludes |
+| `if-no-files-found` | `warn`, also `error` or `ignore` |
+| `retention-days` | the server's default, at most the repository's retention limit |
+| `compression-level` | `6`, from `0` for none to `9` |
+| `overwrite` | `false`, `true` deletes an artifact of the same name first |
+| `include-hidden-files` | `false`, `true` uploads files and directories whose name starts with `.` |
+| `archive` | `true`, `false` uploads a single file as is |
+
+Patterns, symlinks and the artifact's root directory follow `actions/upload-artifact`. `ACTIONS_ARTIFACT_UPLOAD_CONCURRENCY` sets upload concurrency (default `5`), and `ACTIONS_ARTIFACT_UPLOAD_TIMEOUT_MS` sets the upload stall timeout (default `300000`). The step outputs `artifact-id`, `artifact-digest` and `artifact-url`. On Gitea 1.26 and later, the `artifact-url` is the artifact's link on the run page for this attempt, where `actions/upload-artifact` gives a link only GitHub serves.
+
+Container jobs list the search paths in the job container and transfer only the selected files, gzipped when the image has gzip, requiring `sh`, `find` and `tar` in the image. On Kubernetes these files still pass through the API server, unlike `actions/upload-artifact`, which uploads from the pod.
+
+With `gitea-runner exec`, it uses the local artifact server of `--artifact-server-path`.

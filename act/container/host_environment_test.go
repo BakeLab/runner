@@ -132,6 +132,21 @@ func TestHostEnvironmentExecExitCode(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses POSIX shell")
 	}
+	for _, read := range []bool{true, false} {
+		output, err := (&HostEnvironment{AllocatePTY: true}).ExecOutput(t.Context(), []string{"sh", "-c", `test ! -t 1; printf 'out\000'; printf ' failed \n' >&2; exit 3`})
+		require.NoError(t, err)
+		if read {
+			content, err := io.ReadAll(output)
+			var exit ExitCodeError
+			require.ErrorAs(t, err, &exit)
+			assert.Equal(t, ExitCodeError(3), exit)
+			assert.Equal(t, "out\x00", string(content))
+			assert.Equal(t, "Process completed with exit code 3.: failed", err.Error())
+		}
+		var exit ExitCodeError
+		require.ErrorAs(t, output.Close(), &exit)
+		assert.Equal(t, ExitCodeError(3), exit)
+	}
 	for name, allocatePTY := range map[string]bool{"without PTY": false, "with PTY": true} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
