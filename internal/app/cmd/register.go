@@ -89,6 +89,7 @@ const registerTokenEnvVar = "GITEA_RUNNER_REGISTRATION_TOKEN"
 
 var defaultLabels = []string{
 	"ubuntu-latest:docker://docker.gitea.com/runner-images:ubuntu-latest",
+	"ubuntu-26.04:docker://docker.gitea.com/runner-images:ubuntu-26.04",
 	"ubuntu-24.04:docker://docker.gitea.com/runner-images:ubuntu-24.04",
 	"ubuntu-22.04:docker://docker.gitea.com/runner-images:ubuntu-22.04",
 }
