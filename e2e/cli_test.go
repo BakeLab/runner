@@ -90,20 +90,29 @@ container:
 type cliDaemon struct {
 	cmd    *exec.Cmd
 	log    *syncBuffer
-	exited chan error
+	exited chan struct{}
+	err    error
 }
 
 func (c *cliRunner) startDaemon(t *testing.T, args ...string) *cliDaemon {
 	t.Helper()
-	d := &cliDaemon{log: &syncBuffer{}, exited: make(chan error, 1)}
+	d := &cliDaemon{log: &syncBuffer{}, exited: make(chan struct{})}
 	d.cmd = exec.Command(c.bin, append([]string{"daemon", "-c", c.cfgFile}, args...)...)
 	d.cmd.Stdout, d.cmd.Stderr = d.log, d.log
 	if err := d.cmd.Start(); err != nil {
 		t.Fatalf("start daemon: %v", err)
 	}
-	go func() { d.exited <- d.cmd.Wait() }()
+	go func() {
+		d.err = d.cmd.Wait()
+		close(d.exited)
+	}()
 	t.Cleanup(func() {
-		_ = d.cmd.Process.Kill() // no-op once the daemon has exited
+		_ = d.cmd.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-d.exited:
+		case <-time.After(30 * time.Second):
+			_ = d.cmd.Process.Kill()
+		}
 	})
 	return d
 }
@@ -112,8 +121,8 @@ func (c *cliRunner) startDaemon(t *testing.T, args ...string) *cliDaemon {
 func (d *cliDaemon) wait(t *testing.T, timeout time.Duration) error {
 	t.Helper()
 	select {
-	case err := <-d.exited:
-		return err
+	case <-d.exited:
+		return d.err
 	case <-time.After(timeout):
 		t.Fatalf("daemon still running after %s\n%s", timeout, d.log)
 		return nil
@@ -140,14 +149,30 @@ func (d *cliDaemon) requireSuccess(t *testing.T, c *cliRunner, runID int64) {
 // testCLIRegisterDaemon drives the built binary the way a user does: register, then daemon.
 func testCLIRegisterDaemon(t *testing.T) {
 	t.Parallel()
-	c := newCLIRunner(t, "e2e-cli", "")
-	d := c.startDaemon(t)
+	c := newCLIRunner(t, "e2e-registered", "")
+	d := c.startDaemon(t, "--labels", "e2e-cli:docker://"+os.Getenv("E2E_JOB_IMAGE"))
 
 	pushWorkflow(t, c.api, c.repo, "cli.yml")
 	wfRun := waitForRun(t, c.api, c.repo)
 	d.requireSuccess(t, c, wfRun.ID)
 	if logs := runLogs(t, c.api, c.repo, wfRun.ID); commandRow(logs, "e2e-cli-job-ran") == "" {
 		t.Errorf("job logs are missing the marker:\n%s", logs)
+	}
+
+	runners, err := c.api.Runners(t.Context(), c.repo)
+	if err != nil {
+		t.Fatalf("list runners: %v", err)
+	}
+	var labels []string
+	for _, runner := range runners {
+		if runner.Name == c.repo {
+			for _, label := range runner.Labels {
+				labels = append(labels, label.Name)
+			}
+		}
+	}
+	if !slices.Equal(labels, []string{"e2e-cli"}) {
+		t.Errorf("runner %q has labels %v on the server, want only the --labels override", c.repo, labels)
 	}
 
 	d.terminate(t)
@@ -184,36 +209,6 @@ func testCLIOnce(t *testing.T) {
 	if succeeded != 1 || pending != 1 {
 		t.Errorf("got %d succeeded and %d waiting jobs, want 1 and 1: %+v\n%s", succeeded, pending, jobs, d.log)
 	}
-}
-
-// testCLILabelsOverride checks that daemon --labels replaces the labels given at registration.
-func testCLILabelsOverride(t *testing.T) {
-	t.Parallel()
-	c := newCLIRunner(t, "e2e-registered", "")
-	d := c.startDaemon(t, "--labels", "e2e-override:docker://"+os.Getenv("E2E_JOB_IMAGE"))
-
-	pushWorkflow(t, c.api, c.repo, "cli_labels.yml")
-	wfRun := waitForRun(t, c.api, c.repo)
-	d.requireSuccess(t, c, wfRun.ID)
-
-	runners, err := c.api.Runners(t.Context(), c.repo)
-	if err != nil {
-		t.Fatalf("list runners: %v", err)
-	}
-	for _, runner := range runners {
-		if runner.Name != c.repo {
-			continue
-		}
-		var labels []string
-		for _, label := range runner.Labels {
-			labels = append(labels, label.Name)
-		}
-		if !slices.Equal(labels, []string{"e2e-override"}) {
-			t.Errorf("runner has labels %v on the server, want only the --labels override", labels)
-		}
-		return
-	}
-	t.Errorf("runner %q not found among %+v", c.repo, runners)
 }
 
 // testCLIShutdownDrains checks that SIGTERM lets a running job finish within shutdown_timeout.
@@ -282,10 +277,6 @@ func testExecArtifacts(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 
-	bin, err := runnerBinary()
-	if err != nil {
-		t.Fatal(err)
-	}
 	workflow, err := os.ReadFile("testdata/workflows/exec_artifact.yml")
 	if err != nil {
 		t.Fatal(err)
@@ -309,11 +300,9 @@ func testExecArtifacts(t *testing.T) {
 	}
 
 	artifacts := t.TempDir()
-	args := []string{"exec", "-C", workdir, "-W", workflows, "-i", os.Getenv("E2E_JOB_IMAGE"), "--artifact-server-path", artifacts, "--network", fixture.network}
-	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, "ACTIONS_") })
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("exec: %v\n%s", err, out)
+	stdout, stderr, err := runExec(t, nil, "-C", workdir, "-W", workflows, "-i", os.Getenv("E2E_JOB_IMAGE"), "--artifact-server-path", artifacts, "--network", fixture.network)
+	if err != nil {
+		t.Fatalf("exec: %v\n%s%s", err, stdout, stderr)
 	}
 	if blobs, _ := filepath.Glob(filepath.Join(artifacts, "v4", "*", "*", "blob")); len(blobs) != 2 {
 		t.Fatalf("want one v4 artifact blob per workflow run, got %v", blobs)

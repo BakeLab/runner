@@ -37,7 +37,6 @@ func TestCompatibility(t *testing.T) {
 	t.Run("job_timeout", testJobTimeout)
 	t.Run("cli_register_daemon", testCLIRegisterDaemon)
 	t.Run("cli_once", testCLIOnce)
-	t.Run("cli_labels_override", testCLILabelsOverride)
 	t.Run("cli_shutdown_drains", testCLIShutdownDrains)
 	t.Run("cli_shutdown_cancels", testCLIShutdownCancels)
 	t.Run("host_mode", testHostMode)

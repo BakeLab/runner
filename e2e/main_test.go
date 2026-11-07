@@ -31,6 +31,8 @@ import (
 
 const runTimeout = 3 * time.Minute
 
+const cleanupTimeout = 2 * time.Minute
+
 var nonRepoChars = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
 var fixture *GiteaFixture
@@ -42,8 +44,10 @@ var binDir string
 var dockerCLI mobyclient.APIClient
 
 var runnerBinary = sync.OnceValues(func() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
+	defer cancel()
 	bin := filepath.Join(binDir, "gitea-runner")
-	if out, err := exec.Command(cmp.Or(os.Getenv("GO"), "go"), "build", "-o", bin, "..").CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(ctx, cmp.Or(os.Getenv("GO"), "go"), "build", "-o", bin, "..").CombinedOutput(); err != nil {
 		return "", fmt.Errorf("build runner: %w\n%s", err, out)
 	}
 	return bin, nil
@@ -80,7 +84,7 @@ func runSuite(m *testing.M) int {
 		return 1
 	}
 	fixture = f
-	defer func() { _ = fixture.Close(context.Background()) }()
+	defer func() { _ = fixture.Close() }()
 
 	fmt.Fprintf(os.Stderr, "gitea fixture: image=%s version=%s\n", fixture.image, fixture.version)
 

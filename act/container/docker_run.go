@@ -895,6 +895,7 @@ func (cr *containerReference) tryReadID(opt string, cbk func(id int)) common.Exe
 			return nil
 		}
 		defer resp.Close()
+		defer context.AfterFunc(ctx, resp.Close)()
 
 		sid, err := resp.Reader.ReadString('\n')
 		if err != nil {

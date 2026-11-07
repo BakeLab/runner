@@ -80,11 +80,11 @@ func selfNetwork(ctx context.Context, cli mobyclient.APIClient) (string, string,
 	return "", "", false
 }
 
-func StartGitea(ctx context.Context, cli mobyclient.APIClient) (*GiteaFixture, error) {
-	closeClient := true
+func StartGitea(ctx context.Context, cli mobyclient.APIClient) (_ *GiteaFixture, err error) {
+	f := &GiteaFixture{cli: cli}
 	defer func() {
-		if closeClient {
-			_ = cli.Close()
+		if err != nil {
+			_ = f.Close()
 		}
 	}()
 
@@ -123,26 +123,21 @@ func StartGitea(ctx context.Context, cli mobyclient.APIClient) (*GiteaFixture, e
 		return nil, fmt.Errorf("create gitea container: %w", err)
 	}
 
-	f := &GiteaFixture{cli: cli, id: resp.ID, image: image, baseURL: baseURL, network: sharedNet, selfIP: selfIP}
-	closeClient = false
+	f.id, f.image, f.baseURL, f.network, f.selfIP = resp.ID, image, baseURL, sharedNet, selfIP
 
 	if _, err := cli.ContainerStart(ctx, f.id, mobyclient.ContainerStartOptions{}); err != nil {
-		_ = f.Close(ctx)
 		return nil, fmt.Errorf("start gitea container: %w", err)
 	}
 
 	if err := f.waitHealthy(ctx); err != nil {
-		_ = f.Close(ctx)
 		return nil, fmt.Errorf("gitea did not become healthy: %w", err)
 	}
 
 	if err := f.bootstrapAdmin(ctx); err != nil {
-		_ = f.Close(ctx)
 		return nil, fmt.Errorf("bootstrap gitea admin: %w", err)
 	}
 
 	if err := f.readVersion(ctx); err != nil {
-		_ = f.Close(ctx)
 		return nil, fmt.Errorf("read gitea version: %w", err)
 	}
 
@@ -249,6 +244,7 @@ func containerExec(ctx context.Context, cli mobyclient.APIClient, id, user strin
 	if err != nil {
 		return "", err
 	}
+	defer context.AfterFunc(ctx, attached.Close)()
 	defer attached.Close()
 	if stdin != nil {
 		go func() {
@@ -258,7 +254,11 @@ func containerExec(ctx context.Context, cli mobyclient.APIClient, id, user strin
 	}
 
 	var out bytes.Buffer
-	if _, err := stdcopy.StdCopy(&out, &out, attached.Reader); err != nil {
+	_, err = stdcopy.StdCopy(&out, &out, attached.Reader)
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	if err != nil {
 		return "", err
 	}
 
@@ -291,10 +291,12 @@ func (f *GiteaFixture) doJSON(ctx context.Context, method, path string, reqBody,
 	return api.doJSON(ctx, method, path, reqBody, respBody)
 }
 
-func (f *GiteaFixture) Close(ctx context.Context) error {
+func (f *GiteaFixture) Close() error {
 	if f.id == "" {
 		return f.cli.Close()
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
 	_, removeErr := f.cli.ContainerRemove(ctx, f.id, mobyclient.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
 	return errors.Join(removeErr, f.cli.Close())
 }

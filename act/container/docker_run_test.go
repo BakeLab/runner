@@ -378,6 +378,21 @@ func TestDockerAttachStreamClosesWithItsContext(t *testing.T) {
 	client.AssertExpectations(t)
 }
 
+func TestDockerReadIDStreamClosesWithItsContext(t *testing.T) {
+	conn, peer := net.Pipe()
+	t.Cleanup(func() { _ = peer.Close() })
+	client := &mockDockerClient{}
+	client.On("ExecCreate", mock.Anything, "123", mock.AnythingOfType("client.ExecCreateOptions")).
+		Return(mobyclient.ExecCreateResult{ID: "id"}, nil)
+	client.On("ExecAttach", mock.Anything, "id", mobyclient.ExecAttachOptions{}).
+		Return(mobyclient.ExecAttachResult{HijackedResponse: mobyclient.NewHijackedResponse(conn, "")}, nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	require.NoError(t, (&containerReference{id: "123", cli: client}).tryReadID("-u", func(int) { t.Error("read an ID after cancellation") })(ctx))
+	client.AssertExpectations(t)
+}
+
 func TestDockerWaitFailure(t *testing.T) {
 	ctx := t.Context()
 	statusCh := make(chan container.WaitResponse, 1)

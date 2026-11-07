@@ -55,7 +55,9 @@ func checkClusterLeaks() error {
 	if err != nil {
 		return nil // the tests that needed the cluster already failed
 	}
-	if out, err := containerExec(context.Background(), dockerCLI, cluster.id, "", nil,
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+	if out, err := containerExec(ctx, dockerCLI, cluster.id, "", nil,
 		"kubectl", "wait", "--for=delete", "pods,secrets", "--selector=app.kubernetes.io/managed-by=gitea-runner", "--timeout=1m",
 	); err != nil {
 		return fmt.Errorf("job pods or secrets left behind: %w: %s", err, out)
@@ -72,7 +74,7 @@ type kubeCluster struct {
 var (
 	k3s            = sync.OnceValues(startK3s) // independent of Gitea, so it can boot alongside it
 	clusterStarted atomic.Bool
-	clusterCleanup []func()
+	clusterCleanup []func(context.Context)
 	sharedCluster  = sync.OnceValues(func() (*kubeCluster, error) {
 		cluster, err := k3s()
 		if err != nil {
@@ -109,7 +111,9 @@ func stopCluster() {
 	}
 	_, _ = k3s()
 	for _, cleanup := range slices.Backward(clusterCleanup) {
-		cleanup()
+		ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		cleanup(ctx)
+		cancel()
 	}
 }
 
@@ -138,8 +142,8 @@ func startK3s() (*kubeCluster, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create k3s container: %w", err)
 	}
-	clusterCleanup = append(clusterCleanup, func() {
-		_, _ = cli.ContainerRemove(context.Background(), created.ID, mobyclient.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+	clusterCleanup = append(clusterCleanup, func(ctx context.Context) {
+		_, _ = cli.ContainerRemove(ctx, created.ID, mobyclient.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
 	})
 	if _, err := cli.ContainerStart(ctx, created.ID, mobyclient.ContainerStartOptions{}); err != nil {
 		return nil, fmt.Errorf("start k3s container: %w", err)
@@ -170,7 +174,9 @@ func startK3s() (*kubeCluster, error) {
 		inspected, inspectErr := cli.ContainerInspect(ctx, created.ID, mobyclient.ContainerInspectOptions{})
 		if inspectErr != nil || !inspected.Container.State.Running || ctx.Err() != nil {
 			var logs bytes.Buffer
-			if reader, logsErr := cli.ContainerLogs(context.Background(), created.ID, mobyclient.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Tail: "30"}); logsErr == nil {
+			logsCtx, logsCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer logsCancel()
+			if reader, logsErr := cli.ContainerLogs(logsCtx, created.ID, mobyclient.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Tail: "30"}); logsErr == nil {
 				_, _ = stdcopy.StdCopy(&logs, &logs, reader)
 				_ = reader.Close()
 			}
@@ -226,7 +232,7 @@ func preloadImages(ctx context.Context, k3sID string, images ...string) ([]strin
 		if _, err := dockerCLI.ImageTag(ctx, mobyclient.ImageTagOptions{Source: image, Target: alias}); err != nil {
 			return nil, fmt.Errorf("tag %s: %w", image, err)
 		}
-		clusterCleanup = append(clusterCleanup, func() { _, _ = dockerCLI.ImageRemove(context.Background(), alias, mobyclient.ImageRemoveOptions{}) })
+		clusterCleanup = append(clusterCleanup, func(ctx context.Context) { _, _ = dockerCLI.ImageRemove(ctx, alias, mobyclient.ImageRemoveOptions{}) })
 		aliases = append(aliases, alias)
 	}
 	archive, err := dockerCLI.ImageSave(ctx, aliases)

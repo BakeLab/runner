@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -138,14 +139,31 @@ func daemonWorkflow(t *testing.T, m mode, spec workflowSpec) *workflowResult {
 	return result
 }
 
-func execWorkflow(t *testing.T, m mode, spec workflowSpec) *workflowResult {
+func runExec(t *testing.T, env []string, args ...string) (stdout, stderr []byte, err error) {
 	t.Helper()
-	ctx := t.Context()
-
 	bin, err := runnerBinary()
 	if err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithTimeout(t.Context(), runTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, append([]string{"exec"}, args...)...)
+	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, "ACTIONS_") }), env...)
+	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	cmd.WaitDelay = cleanupTimeout
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdoutBuf, &stderrBuf
+	err = cmd.Run()
+	if ctx.Err() != nil {
+		t.Fatalf("exec did not finish within %s\n%s%s", runTimeout, stdoutBuf.Bytes(), stderrBuf.Bytes())
+	}
+	return stdoutBuf.Bytes(), stderrBuf.Bytes(), err
+}
+
+func execWorkflow(t *testing.T, m mode, spec workflowSpec) *workflowResult {
+	t.Helper()
+	ctx := t.Context()
+
 	workdir := t.TempDir()
 	workflows := filepath.Join(workdir, ".gitea", "workflows")
 	if err := os.MkdirAll(workflows, 0o755); err != nil {
@@ -170,12 +188,12 @@ func execWorkflow(t *testing.T, m mode, spec workflowSpec) *workflowResult {
 		}
 	}
 
-	args := []string{"exec", "--json", "-C", workdir, "-W", workflows, "--artifact-server-path", t.TempDir(), "--artifact-server-port", "0"}
-	env := slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, "ACTIONS_") })
+	args := []string{"--json", "-C", workdir, "-W", workflows, "--artifact-server-path", t.TempDir(), "--artifact-server-port", "0"}
+	var env []string
 	if m.kubernetes {
 		cluster := requireCluster(t)
 		args = append(args, "-i", "kubernetes://"+cluster.jobImage)
-		env = append(env, "KUBECONFIG="+cluster.kubernetes.Kubeconfig)
+		env = []string{"KUBECONFIG=" + cluster.kubernetes.Kubeconfig}
 	} else {
 		args = append(args, "-i", os.Getenv("E2E_JOB_IMAGE"), "--network", fixture.network)
 	}
@@ -185,21 +203,17 @@ func execWorkflow(t *testing.T, m mode, spec workflowSpec) *workflowResult {
 			args = append(args, "--input", name+"="+value)
 		}
 	}
-	cmd := exec.CommandContext(ctx, bin, append(args, spec.execArgs...)...)
-	cmd.Env = env
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	runErr := cmd.Run()
+	stdout, stderr, runErr := runExec(t, env, append(args, spec.execArgs...)...)
 	var exitErr *exec.ExitError
 	if runErr != nil && !errors.As(runErr, &exitErr) {
-		t.Fatalf("exec: %v\n%s", runErr, stderr.String())
+		t.Fatalf("exec: %v\n%s", runErr, stderr)
 	}
 
 	result := &workflowResult{conclusion: "success", jobs: map[string]string{}}
 	if runErr != nil {
 		result.conclusion = "failure"
 	}
-	scanner := bufio.NewScanner(&stdout)
+	scanner := bufio.NewScanner(bytes.NewReader(stdout))
 	scanner.Buffer(nil, 1<<20)
 	for scanner.Scan() {
 		var entry struct {
@@ -220,8 +234,8 @@ func execWorkflow(t *testing.T, m mode, spec workflowSpec) *workflowResult {
 			}
 		}
 	}
-	if result.conclusion != "success" && len(result.jobs) == 0 {
-		t.Fatalf("exec ran no job: %v\n%s", runErr, stderr.String())
+	if len(result.jobs) == 0 {
+		t.Fatalf("exec ran no job: %v\n%s", runErr, stderr)
 	}
 	return result
 }
