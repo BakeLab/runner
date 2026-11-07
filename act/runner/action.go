@@ -472,7 +472,7 @@ func newStepContainer(ctx context.Context, step step, image string, cmd, entrypo
 
 	envList = append(envList, rc.runnerEnv(ctx)...)
 
-	binds, mounts := rc.GetBindsAndMounts(ctx)
+	binds, mounts, _ := rc.GetBindsAndMounts(ctx)
 	networkMode := "container:" + rc.jobContainerName()
 	if rc.IsHostEnv() {
 		networkMode = "default"

@@ -9,7 +9,7 @@ It is configured under `runner.post_task_script` in the runner YAML config (see 
 For each task, execution order is:
 
 1. Workflow runs (steps, actions, containers).
-2. In-job cleanup (action `post:` steps, container stop/remove).
+2. In-job cleanup (action `post:` steps, emptying a bind-mounted workspace from inside the job container when a non-root runner on Linux may not own its files, container stop/remove).
 3. Job outputs are reported to Gitea.
 4. Bind-workdir workspace removal, when `container.bind_workdir` is enabled.
 5. **Post-task script** (this hook).

@@ -92,3 +92,8 @@ func (cm *containerMock) Inspect(ctx context.Context) (*container.Info, error) {
 func (cm *containerMock) CopyTarStream(ctx context.Context, destPath string, write func(*container.TarWriter) error) error {
 	return cm.Called(ctx, destPath, write).Error(0)
 }
+
+func (cm *containerMock) ReplaceLogWriter(stdout, stderr io.Writer) (io.Writer, io.Writer) {
+	args := cm.Called(stdout, stderr)
+	return args.Get(0).(io.Writer), args.Get(1).(io.Writer)
+}

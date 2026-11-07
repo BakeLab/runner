@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -455,7 +456,7 @@ func TestRunContext_GetBindsAndMounts(t *testing.T) {
 			t.Run(testcase.name+testBindSuffix, func(t *testing.T) {
 				rctemplate.Config.Workdir = testcase.name
 				rctemplate.Config.BindWorkdir = bindWorkDir
-				gotbind, gotmount := rctemplate.GetBindsAndMounts(t.Context())
+				gotbind, gotmount, _ := rctemplate.GetBindsAndMounts(t.Context())
 
 				if bindWorkDir {
 					fullBind := testcase.name + ":" + testcase.want
@@ -507,7 +508,7 @@ func TestRunContext_GetBindsAndMounts(t *testing.T) {
 			rc.ExprEval = rc.NewExpressionEvaluator(t.Context())
 			require.NoError(t, rc.resolvePlatformImage(t.Context()))
 
-			gotbind, gotmount := rc.GetBindsAndMounts(t.Context())
+			gotbind, gotmount, _ := rc.GetBindsAndMounts(t.Context())
 			assert.Contains(t, gotbind, "/host/mame/roms:/root/.mame/roms:ro")
 			assert.NotContains(t, gotbind, "${{ secrets.MAME }}")
 			assert.NotContains(t, gotmount, "${{ secrets.MAME }}")
@@ -522,7 +523,7 @@ func TestRunContext_GetBindsAndMounts(t *testing.T) {
 				rc.containerSpec.Volumes = testcase.volumes
 				rc.Run.JobID = "job1"
 
-				gotbind, gotmount := rc.GetBindsAndMounts(t.Context())
+				gotbind, gotmount, _ := rc.GetBindsAndMounts(t.Context())
 
 				if len(testcase.wantbind) > 0 {
 					assert.Contains(t, gotbind, testcase.wantbind)
@@ -551,12 +552,12 @@ func TestRunContext_GetBindsAndMounts(t *testing.T) {
 	t.Run("ToolCacheMount", func(t *testing.T) {
 		rc := newRunContext(&Config{})
 
-		_, gotmount := rc.GetBindsAndMounts(t.Context())
+		_, gotmount, _ := rc.GetBindsAndMounts(t.Context())
 		assert.NotContains(t, gotmount, sharedToolCacheVolume)
 
 		rc.Config.SharedToolCache = true
 		rc.containerSpec.Volumes = []string{"/unapproved:" + container.DefaultToolCache}
-		_, gotmount = rc.GetBindsAndMounts(t.Context())
+		_, gotmount, _ = rc.GetBindsAndMounts(t.Context())
 		assert.Equal(t, container.DefaultToolCache, gotmount[sharedToolCacheVolume])
 	})
 
@@ -569,16 +570,26 @@ func TestRunContext_GetBindsAndMounts(t *testing.T) {
 			Config: &Config{BindWorkdir: true, Workdir: "/workspace/1/owner/repo", PresetGitHubContext: &model.GithubContext{}, ValidVolumes: []string{"claimed"}},
 		}
 
-		gotbind, _ := rc.GetBindsAndMounts(t.Context())
+		gotbind, _, workspace := rc.GetBindsAndMounts(t.Context())
 		assert.True(t, slices.ContainsFunc(gotbind, func(bind string) bool { return strings.HasPrefix(bind, "/workspace/1:/workspace/1") }), gotbind)
+		assert.Equal(t, "/workspace/1", workspace)
 
 		rc.Config.BindWorkdir = false
-		_, gotmount := rc.GetBindsAndMounts(t.Context())
+		_, gotmount, workspace := rc.GetBindsAndMounts(t.Context())
 		assert.Equal(t, "/workspace/1", gotmount[rc.jobContainerName()])
+		assert.Empty(t, workspace)
 
 		rc.containerSpec.Volumes = []string{"claimed:/workspace/1"}
-		_, gotmount = rc.GetBindsAndMounts(t.Context())
+		_, gotmount, _ = rc.GetBindsAndMounts(t.Context())
 		assert.Equal(t, "/workspace/1/owner/repo", gotmount[rc.jobContainerName()])
+		rc.Config.BindWorkdir = true
+		_, _, workspace = rc.GetBindsAndMounts(t.Context())
+		assert.Equal(t, "/workspace/1/owner/repo", workspace)
+
+		rc.containerSpec.Volumes = nil
+		rc.Config.PresetGitHubContext = nil
+		_, _, workspace = rc.GetBindsAndMounts(t.Context())
+		assert.Empty(t, workspace)
 	})
 }
 
@@ -611,7 +622,7 @@ func TestRunContextValidVolumes(t *testing.T) {
 	rc.JobContainer = hostEnv
 	rc.Config.BindWorkdir = false
 	rc.Config.SharedToolCache = true
-	binds, mounts := rc.GetBindsAndMounts(t.Context())
+	binds, mounts, _ := rc.GetBindsAndMounts(t.Context())
 	assert.Subset(t, binds, []string{hostEnv.Path + ":" + hostEnv.Path, hostEnv.GetActPath() + ":" + hostEnv.GetActPath()})
 	assert.Contains(t, mounts, sharedToolCacheVolume)
 	assert.Equal(t, binds, container.SanitizeBinds(t.Context(), rc.validVolumes(), binds))
@@ -681,6 +692,110 @@ func TestCleanupJobVolumesReapsAbandonedDeferredCleanup(t *testing.T) {
 	require.ErrorContains(t, err, "became-active")
 	require.ErrorContains(t, err, "remove-failed")
 	assert.ElementsMatch(t, []string{"became-active", "remove-failed", "foreign", "fresh", "unknown-age"}, slices.Collect(maps.Keys(volumes)))
+}
+
+func TestCleanupJobResourcesEmptiesTaskWorkspace(t *testing.T) {
+	defer func(previous bool) { runnerCanRemoveJobFiles = previous }(runnerCanRemoveJobFiles)
+	for _, tt := range []struct {
+		name, workspace string
+		caller          *caller
+		runnerCanRemove bool
+		execErr         error
+		log             string
+	}{
+		{name: "refusal is logged", workspace: "/workspace/1", execErr: container.ExitCodeError(3), log: "not emptying workspace /workspace/1"},
+		{name: "failure does not fail the job", workspace: "/workspace/1", execErr: errors.New("no rm"), log: "could not empty workspace /workspace/1"},
+		{name: "no runner bind"},
+		{name: "called workflow shares it", workspace: "/workspace/1", caller: &caller{}},
+		{name: "runner removes it itself", workspace: "/workspace/1", runnerCanRemove: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			runnerCanRemoveJobFiles = tt.runnerCanRemove
+			processLog := logtest.SetDefault(t)
+			var jobLog bytes.Buffer
+			var calls []string
+			job := &containerMock{}
+			if tt.log != "" {
+				job.On("ReplaceLogWriter", io.Discard, io.Discard).Return(&jobLog, &jobLog).Once()
+				job.On("ReplaceLogWriter", &jobLog, &jobLog).Return(io.Discard, io.Discard).Once()
+				job.On("Exec", mock.MatchedBy(func(command []string) bool { return command[4] == tt.workspace }), map[string]string{"PATH": "/usr/sbin:/usr/bin:/sbin:/bin"}, "0", "/").Return(func(ctx context.Context) error {
+					calls = append(calls, "exec")
+					deadline, ok := ctx.Deadline()
+					assert.True(t, ok)
+					assert.LessOrEqual(t, time.Until(deadline), 10*time.Second-container.DrainGracePeriod)
+					common.Logger(ctx).Infof("workspace script output")
+					return tt.execErr
+				})
+			}
+			job.On("Remove").Return(func(context.Context) error {
+				calls = append(calls, "remove")
+				return nil
+			})
+			rc := &RunContext{
+				Config:             &Config{},
+				Run:                &model.Run{Workflow: &model.Workflow{Name: "workflow"}, JobID: "job"},
+				JobContainer:       job,
+				taskWorkspace:      tt.workspace,
+				caller:             tt.caller,
+				deferVolumeCleanup: func(common.Executor) {},
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+			defer cancel()
+			ctx = common.WithLogger(ctx, logging.New(logging.NewLevelHandler(newJobLogHandler(&jobLog, cyan), logging.LevelInfo)))
+			require.NoError(t, rc.cleanupJobResources("", false, false)(ctx))
+			job.AssertExpectations(t)
+			assert.NotContains(t, jobLog.String(), "workspace")
+			if tt.log == "" {
+				assert.Equal(t, []string{"remove"}, calls)
+				return
+			}
+			assert.Equal(t, []string{"exec", "remove"}, calls)
+			assert.True(t, slices.ContainsFunc(processLog.AllRecords(), func(record logging.Record) bool {
+				return strings.HasPrefix(record.Message, tt.log)
+			}), processLog.AllRecords())
+		})
+	}
+}
+
+func TestEmptyTaskWorkspaceScript(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the script runs in the linux job container")
+	}
+	run := func(t *testing.T, workspace string, mountpoints ...string) error {
+		t.Helper()
+		var mountinfo strings.Builder
+		for _, mountpoint := range mountpoints {
+			fmt.Fprintf(&mountinfo, "36 35 98:0 /src %s rw - ext4 /dev/sda1 rw\n", mountpoint)
+		}
+		info := filepath.Join(t.TempDir(), "mountinfo")
+		require.NoError(t, os.WriteFile(info, []byte(mountinfo.String()), 0o600))
+		return exec.Command("sh", "-c", emptyTaskWorkspaceScript, "sh", workspace, info).Run()
+	}
+
+	workspace := t.TempDir()
+	for _, file := range []string{"owner/repo/file", ".hidden", "..odd"} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(workspace, file)), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(workspace, file), nil, 0o600))
+	}
+	require.NoError(t, run(t, workspace, workspace))
+	entries, err := os.ReadDir(workspace)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+
+	for _, tt := range []struct {
+		name, workspace string
+		mountpoints     []string
+	}{
+		{"a mount below it", "/nonexistent/1", []string{"/nonexistent/1", "/nonexistent/1/owner/repo/cache"}},
+		{"a workspace that is not a mountpoint", "/nonexistent/1", []string{"/nonexistent/2"}},
+		{"a top-level directory", "/nonexistent", []string{"/nonexistent"}},
+	} {
+		t.Run("refuses "+tt.name, func(t *testing.T) {
+			var exitErr *exec.ExitError
+			require.ErrorAs(t, run(t, tt.workspace, tt.mountpoints...), &exitErr)
+			assert.Equal(t, 3, exitErr.ExitCode())
+		})
+	}
 }
 
 func TestRemoveDockerActionImagesByTag(t *testing.T) {

@@ -41,13 +41,6 @@ import (
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
-// drainGracePeriod bounds how long we wait for an output-copy goroutine to
-// finish draining a container's output before returning, so that neither a
-// cancellation (waitForCommand) nor a normal container exit (wait) truncates
-// the tail of the log. It is a safety bound: in the common case the stream
-// reaches EOF and the goroutine returns well before this elapses.
-const drainGracePeriod = 2 * time.Second
-
 // NewContainer creates a reference to a container
 func NewContainer(input *NewContainerInput) ExecutionsEnvironment {
 	// Resolved up front because the image pull runs before the container is created.
@@ -947,7 +940,7 @@ func (cr *containerReference) waitForCommand(ctx context.Context, resp client.Hi
 			if err != nil {
 				logger.Debugf("Failed to drain command output after cancellation: %v", err)
 			}
-		case <-time.After(drainGracePeriod):
+		case <-time.After(DrainGracePeriod):
 			logger.Warn("Timed out draining command output after cancellation")
 		}
 
@@ -1122,7 +1115,7 @@ func (cr *containerReference) wait() common.Executor {
 		if cr.attachDone != nil {
 			select {
 			case <-cr.attachDone:
-			case <-time.After(drainGracePeriod):
+			case <-time.After(DrainGracePeriod):
 				logger.Warn("Timed out draining container output")
 			}
 			cr.attachDone = nil

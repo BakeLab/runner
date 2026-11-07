@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"gitea.com/gitea/runner/act/common"
+	"gitea.com/gitea/runner/act/common/logging"
 	"gitea.com/gitea/runner/act/container"
 	"gitea.com/gitea/runner/act/ghcontext"
 	"gitea.com/gitea/runner/internal/pkg/lock"
@@ -75,6 +76,7 @@ type RunContext struct {
 	actionInputs        map[string]any // inputs of the composite action this runs, nil for a job
 	Masks               []string
 	cleanUpJobContainer common.Executor
+	taskWorkspace       string
 	deferVolumeCleanup  func(common.Executor)
 	caller              *caller           // job calling this RunContext (reusable workflows)
 	workflowCallInputs  map[string]any    // the caller's with:, resolved once by resolveWorkflowCall
@@ -378,8 +380,8 @@ func splitVolumes(specs []string) ([]string, map[string]string, map[string]bool)
 	return binds, mounts, targets
 }
 
-// Returns the binds and mounts for the container, resolving paths as appopriate
-func (rc *RunContext) GetBindsAndMounts(ctx context.Context) ([]string, map[string]string) {
+// Returns the binds and mounts for the container, resolving paths as appropriate, and the task workspace the runner binds
+func (rc *RunContext) GetBindsAndMounts(ctx context.Context) ([]string, map[string]string, string) {
 	name := rc.jobContainerName()
 	ext := container.LinuxContainerEnvironmentExtensions{}
 
@@ -399,11 +401,15 @@ func (rc *RunContext) GetBindsAndMounts(ctx context.Context) ([]string, map[stri
 	}
 	mounts[name+"-env"] = ext.GetActPath() // runner-internal, never overridable
 
+	taskWorkspace := ""
 	if workdir := ext.ToContainerPath(rc.Config.Workdir); !claimed[workdir] {
 		source := rc.workdirMountRoot()
 		target := ext.ToContainerPath(source)
 		if claimed[target] {
 			source, target = rc.Config.Workdir, workdir
+		}
+		if rc.Config.BindWorkdir && rc.Config.PresetGitHubContext != nil {
+			taskWorkspace = target
 		}
 		if rc.Config.BindWorkdir {
 			bindModifiers := ""
@@ -419,7 +425,7 @@ func (rc *RunContext) GetBindsAndMounts(ctx context.Context) ([]string, map[stri
 		}
 	}
 
-	return binds, mounts
+	return binds, mounts, taskWorkspace
 }
 
 func (rc *RunContext) startHostEnvironment() common.Executor {
@@ -672,7 +678,8 @@ func (rc *RunContext) startJobContainer() common.Executor {
 			return err
 		}
 		rc.startDockerProxy(ctx)
-		containerInput.Binds, containerInput.Mounts = rc.GetBindsAndMounts(ctx)
+		var taskWorkspace string
+		containerInput.Binds, containerInput.Mounts, taskWorkspace = rc.GetBindsAndMounts(ctx)
 		containerInput.ValidVolumes = rc.validVolumes()
 
 		rc.jobNetworkName = networkName
@@ -687,6 +694,7 @@ func (rc *RunContext) startJobContainer() common.Executor {
 			func(ctx context.Context) error { return rc.createJobVolumes(ctx, containerInput.Mounts) },
 			rc.JobContainer.Create(rc.Config.ContainerCapAdd, rc.Config.ContainerCapDrop),
 			rc.JobContainer.Start(false),
+			func(context.Context) error { rc.taskWorkspace = taskWorkspace; return nil },
 			rc.captureJobContainerInfo(),
 			rc.copyWorkflowFiles(),
 			rc.waitForServiceContainers(),
@@ -801,7 +809,10 @@ func (rc *RunContext) cleanupJobResources(networkName string, createAndDeleteNet
 		errs := []error{rc.closeDockerProxy(ctx)}
 		var containers []common.Executor
 		if rc.JobContainer != nil {
-			containers = append(containers, rc.JobContainer.Remove())
+			containers = append(containers, func(ctx context.Context) error {
+				rc.emptyTaskWorkspace(ctx)
+				return rc.JobContainer.Remove()(ctx)
+			})
 		}
 		if len(rc.serviceContainers) > 0 {
 			logger.Infof("Cleaning up services for job %s", rc.JobName)
@@ -828,6 +839,42 @@ func (rc *RunContext) cleanupJobResources(networkName string, createAndDeleteNet
 			})
 		}
 		return errors.Join(append(errs, runAll(ctx, rest))...)
+	}
+}
+
+// exits 3 unless $1 is a mountpoint in mountinfo $2, at least two levels deep, with no mount below it for rm to cross into
+const emptyTaskWorkspaceScript = `case "$1" in /?*/?*) ;; *) exit 3 ;; esac
+mounted=
+while read -r _ _ _ _ point _; do
+	case "$point" in "$1") mounted=1 ;; "$1"/*) exit 3 ;; esac
+done <"$2"
+[ "$mounted" ] || exit 3
+rm -rf "$1"/* "$1"/.[!.]* "$1"/..?*`
+
+var runnerCanRemoveJobFiles = runtime.GOOS != "linux" || os.Geteuid() == 0 // root, or a desktop VM mapping container files to the user, replaced in tests
+
+// empties the workspace as root, on root-owned PATH dirs only, for a runner that may not own what the job wrote, called workflows share it
+func (rc *RunContext) emptyTaskWorkspace(ctx context.Context) {
+	if rc.taskWorkspace == "" || rc.caller != nil || runnerCanRemoveJobFiles {
+		return
+	}
+	budget := 30 * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		budget = min(budget, time.Until(deadline)/2-container.DrainGracePeriod)
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	stdout, stderr := rc.JobContainer.ReplaceLogWriter(io.Discard, io.Discard)
+	defer rc.JobContainer.ReplaceLogWriter(stdout, stderr)
+	err := rc.JobContainer.Exec(
+		[]string{"sh", "-c", emptyTaskWorkspaceScript, "sh", rc.taskWorkspace, "/proc/self/mountinfo"},
+		map[string]string{"PATH": "/usr/sbin:/usr/bin:/sbin:/bin"}, "0", "/",
+	)(common.WithLogger(ctx, logging.New(logging.DiscardHandler)))
+	switch {
+	case errors.Is(err, container.ExitCodeError(3)):
+		logging.Infof("not emptying workspace %s of %s: under two levels deep, not a mountpoint as given, or a mount below it", rc.taskWorkspace, rc.jobContainerName())
+	case err != nil:
+		logging.Infof("could not empty workspace %s of %s: %v", rc.taskWorkspace, rc.jobContainerName(), err)
 	}
 }
 
