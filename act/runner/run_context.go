@@ -380,7 +380,7 @@ func splitVolumes(specs []string) ([]string, map[string]string, map[string]bool)
 	return binds, mounts, targets
 }
 
-// Returns the binds and mounts for the container, resolving paths as appropriate, and the task workspace the runner binds
+// Returns the container's binds, mounts and bound task workspace, resolving paths as appropriate
 func (rc *RunContext) GetBindsAndMounts(ctx context.Context) ([]string, map[string]string, string) {
 	name := rc.jobContainerName()
 	ext := container.LinuxContainerEnvironmentExtensions{}
@@ -842,7 +842,7 @@ func (rc *RunContext) cleanupJobResources(networkName string, createAndDeleteNet
 	}
 }
 
-// exits 3 unless $1 is a mountpoint in mountinfo $2, at least two levels deep, with no mount below it for rm to cross into
+// exits 3 unless workspace $1 is safe to empty per mountinfo $2
 const emptyTaskWorkspaceScript = `case "$1" in /?*/?*) ;; *) exit 3 ;; esac
 mounted=
 while read -r _ _ _ _ point _; do
@@ -851,9 +851,9 @@ done <"$2"
 [ "$mounted" ] || exit 3
 rm -rf "$1"/* "$1"/.[!.]* "$1"/..?*`
 
-var runnerCanRemoveJobFiles = runtime.GOOS != "linux" || os.Geteuid() == 0 // root, or a desktop VM mapping container files to the user, replaced in tests
+var runnerCanRemoveJobFiles = runtime.GOOS != "linux" || os.Geteuid() == 0 // root, or a desktop VM mapping file ownership, replaced in tests
 
-// empties the workspace as root, on root-owned PATH dirs only, for a runner that may not own what the job wrote, called workflows share it
+// runs as root with root-owned PATH dirs only, skipped for called workflows sharing the workspace
 func (rc *RunContext) emptyTaskWorkspace(ctx context.Context) {
 	if rc.taskWorkspace == "" || rc.caller != nil || runnerCanRemoveJobFiles {
 		return

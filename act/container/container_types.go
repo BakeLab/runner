@@ -25,11 +25,7 @@ import (
 
 var hostOS = runtime.GOOS // replaced in tests
 
-// DrainGracePeriod bounds how long we wait for an output-copy goroutine to
-// finish draining a container's output before returning, so that neither a
-// cancellation (waitForCommand) nor a normal container exit (wait) truncates
-// the tail of the log. It is a safety bound: in the common case the stream
-// reaches EOF and the goroutine returns well before this elapses.
+// DrainGracePeriod caps the wait for container output to drain so the log tail is not truncated
 const DrainGracePeriod = 2 * time.Second
 
 // ExitCodeError reports a non-zero process exit code from a container command.
