@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +22,8 @@ import (
 	"testing/iotest"
 	"testing/synctest"
 	"time"
+
+	"gitea.com/gitea/runner/act/common/logging/logtest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,7 +53,23 @@ func signArtifactURL(h *Handler, id int64) string {
 
 func TestHandler_ExternalURL(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "http://[2001:db8::1]:8080", (&Handler{outboundIP: "2001:db8::1", port: 8080}).ExternalURL())
+	assert.Empty(t, (*Handler)(nil).RefreshExternalURL())
+	assert.Equal(t, "http://cache.example:8080", (&Handler{outboundIP: "cache.example", port: 8080}).RefreshExternalURL())
+
+	logger, logs := logtest.NewLogger()
+	var ip net.IP
+	handler := &Handler{port: 8080, logger: logger, detectOutboundIP: func() net.IP { return ip }}
+	assert.Empty(t, handler.RefreshExternalURL())
+	ip = net.ParseIP("2001:db8::1")
+	assert.Equal(t, "http://[2001:db8::1]:8080", handler.RefreshExternalURL())
+	assert.Equal(t, "http://[2001:db8::1]:8080", handler.RefreshExternalURL())
+	ip = net.ParseIP("192.0.2.1")
+	assert.Equal(t, "http://[2001:db8::1]:8080", handler.ExternalURL())
+	assert.Equal(t, "http://192.0.2.1:8080", handler.RefreshExternalURL())
+	ip = nil
+	assert.Equal(t, "http://192.0.2.1:8080", handler.RefreshExternalURL())
+	require.Len(t, logs.AllRecords(), 1)
+	assert.Contains(t, logs.LastRecord().Message, "IPv6")
 }
 
 func TestHandler_Upstream(t *testing.T) {

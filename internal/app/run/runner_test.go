@@ -306,7 +306,7 @@ func TestNewRunnerLeavesProxyToTheTask(t *testing.T) {
 
 	require.NotContains(t, r.envs, "http_proxy")
 	require.NotContains(t, r.envs, "no_proxy")
-	proxyEnv := JobProxyEnv(r.envs, r.builtInCacheURL(), nil)
+	proxyEnv := JobProxyEnv(r.envs, r.cacheHandler.ExternalURL(), nil)
 	assert.Contains(t, proxyEnv["no_proxy"], "runner.local")
 	assert.NotContains(t, proxyEnv["no_proxy"], "cache.local")
 }
@@ -355,7 +355,7 @@ func TestNewRunnerCacheServiceV2(t *testing.T) {
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "the advertised results service serves no cache service")
-	assert.Equal(t, r.envs["ACTIONS_CACHE_URL"], r.builtInCacheURL(), "the address only the runner knows is bypassed for the operator")
+	assert.NotContains(t, r.envs, "ACTIONS_CACHE_URL")
 
 	envs := r.cloneEnvs()
 	r.setResultsService(envs, resultsURL)
@@ -390,10 +390,10 @@ func TestNewRunnerCacheServiceV2(t *testing.T) {
 
 	workflow, err := model.ReadWorkflow(strings.NewReader(`jobs: {native: {runs-on: native}, linux: {runs-on: linux}, containerized: {runs-on: native, container: alpine}, empty: {runs-on: native, container: ""}}`))
 	require.NoError(t, err)
-	r.isolatedCacheContainer = func() string { return "a1b2c3d4e5f6" }
+	r.isolatedCacheContainer = func(_cacheURL string) string { return "a1b2c3d4e5f6" }
 	pickPlatform := func(runsOn []string) string { return map[string]string{"native": labels.SelfHostedPlatform}[runsOn[0]] }
 	for job, isolated := range map[string]bool{"native": false, "linux": true, "containerized": true, "empty": false} {
-		cacheURL, cacheContainer := r.cacheForJob(workflow.GetJob(job), pickPlatform(workflow.GetJob(job).RunsOn()))
+		cacheURL, cacheContainer := r.cacheForJob(workflow.GetJob(job), pickPlatform(workflow.GetJob(job).RunsOn()), t.Logf)
 		if isolated {
 			assert.Equal(t, "a1b2c3d4e5f6", cacheContainer, job)
 			assert.Equal(t, strings.Replace(r.cacheHandler.ExternalURL(), "127.0.0.1", cacheContainer, 1), cacheURL, job)
@@ -402,6 +402,41 @@ func TestNewRunnerCacheServiceV2(t *testing.T) {
 			assert.Equal(t, r.cacheHandler.ExternalURL(), cacheURL, job)
 		}
 	}
+}
+
+func TestCacheForJobIPv6WarningAndIsolationRecheck(t *testing.T) {
+	handler, err := artifactcache.StartHandler(artifactcache.Options{OutboundIP: "2001:db8::1", Upstream: "http://cache.invalid"})
+	require.NoError(t, err)
+	defer handler.Close()
+	var checked []string
+	r := &Runner{cfg: &config.Config{}, cacheHandler: handler, isolatedCacheContainer: lastResult(func(cacheURL string) (string, bool) {
+		checked = append(checked, cacheURL)
+		return "", cacheURL != "http://unreachable"
+	})}
+	warnings := 0
+	logf := func(_format string, _args ...any) { warnings++ }
+	workflow, err := model.ReadWorkflow(strings.NewReader(`jobs: {native: {runs-on: native}, containerized: {runs-on: native, container: alpine}}`))
+	require.NoError(t, err)
+	for _, job := range []string{"native", "containerized", "containerized"} {
+		cacheURL, _ := r.cacheForJob(workflow.GetJob(job), labels.SelfHostedPlatform, logf)
+		assert.Equal(t, handler.ExternalURL(), cacheURL)
+	}
+	assert.Equal(t, 2, warnings)
+	assert.Equal(t, []string{handler.ExternalURL()}, checked)
+
+	r.cfg.Container.NetworkCreateOptions.EnableIPv6 = new(true)
+	r.cacheForJob(workflow.GetJob("containerized"), labels.SelfHostedPlatform, logf)
+	assert.Equal(t, 2, warnings)
+	r.cfg.Container.Network = "bridge"
+	r.cacheForJob(workflow.GetJob("containerized"), labels.SelfHostedPlatform, logf)
+	assert.Equal(t, 3, warnings)
+	r.cfg.Cache.Host = "2001:db8::1"
+	r.cacheForJob(workflow.GetJob("containerized"), labels.SelfHostedPlatform, logf)
+	assert.Equal(t, 3, warnings)
+
+	r.isolatedCacheContainer("http://unreachable")
+	r.isolatedCacheContainer("http://unreachable")
+	assert.Len(t, checked, 3)
 }
 
 func TestRestoreCalledWorkflowContext(t *testing.T) {

@@ -104,7 +104,9 @@ type Handler struct {
 	stopSync context.CancelFunc
 	syncing  sync.WaitGroup
 
+	outboundIPMu      sync.RWMutex
 	outboundIP        string
+	detectOutboundIP  func() net.IP // nil when the address is configured
 	instanceTransport http.RoundTripper
 
 	// internalSecret guards /_internal/{register,revoke}. When set, a remote
@@ -158,6 +160,7 @@ func StartHandler(opts Options) (*Handler, error) {
 		policy:            opts.Policy.withDefaults(),
 		freeDisk:          disk.FreeBytes,
 		dbLock:            make(chan struct{}, 1),
+		outboundIP:        opts.OutboundIP,
 		instanceTransport: opts.InstanceTransport,
 	}
 
@@ -167,12 +170,11 @@ func StartHandler(opts Options) (*Handler, error) {
 	logger = logger.With("module", "artifactcache")
 	h.logger = logger
 
-	if opts.OutboundIP != "" {
-		h.outboundIP = opts.OutboundIP
-	} else if ip := common.GetOutboundIP(); ip == nil {
-		return nil, errors.New("unable to determine outbound IP address")
-	} else {
-		h.outboundIP = ip.String()
+	if opts.OutboundIP == "" {
+		h.detectOutboundIP = common.GetOutboundIP
+		if h.RefreshExternalURL() == "" {
+			logger.Warn("unable to determine an outbound IP address for the cache server yet, set cache.host to configure one")
+		}
 	}
 
 	if opts.Upstream != "" {
@@ -304,9 +306,34 @@ func (h *Handler) cacheForwarder(upstream string) (http.Handler, error) {
 	}), nil
 }
 
+// ExternalURL is "" while no address is known.
 func (h *Handler) ExternalURL() string {
-	// TODO: make the external url configurable if necessary
+	if h == nil {
+		return ""
+	}
+	h.outboundIPMu.RLock()
+	defer h.outboundIPMu.RUnlock()
+	if h.outboundIP == "" {
+		return ""
+	}
 	return "http://" + net.JoinHostPort(h.outboundIP, strconv.Itoa(h.port))
+}
+
+// RefreshExternalURL re-detects an unconfigured address, which can change after startup.
+func (h *Handler) RefreshExternalURL() string {
+	if h != nil && h.detectOutboundIP != nil {
+		if ip := h.detectOutboundIP(); ip != nil {
+			h.outboundIPMu.Lock()
+			if address := ip.String(); address != h.outboundIP {
+				h.outboundIP = address
+				if ip.To4() == nil {
+					h.logger.Warnf("detected IPv6 address %s for the cache server, jobs on IPv4-only networks cannot reach it, set cache.host if they fail to", address)
+				}
+			}
+			h.outboundIPMu.Unlock()
+		}
+	}
+	return h.ExternalURL()
 }
 
 func (h *Handler) baseURL(cred JobCredential) string {

@@ -6,6 +6,7 @@ package common
 
 import (
 	"net"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -55,19 +56,22 @@ func GetOutboundIP() net.IP {
 }
 
 func preferredIP(ips []interfaceIP) net.IP {
+	ips = slices.DeleteFunc(ips, func(ip interfaceIP) bool {
+		return len(ip.Name) == 15 && strings.HasPrefix(ip.Name, "br-") && strings.Trim(ip.Name[3:], "0123456789abcdef") == "" // a Docker network's bridge, removed with the network
+	})
 	if len(ips) == 0 {
 		return nil
 	}
 	sort.Slice(ips, func(i, j int) bool {
 		first, second := ips[i], ips[j]
 
-		// ethernet is preferred
-		if vi, vj := strings.HasPrefix(first.Name, "e"), strings.HasPrefix(second.Name, "e"); vi != vj {
+		// IPv4 is preferred, as job networks are IPv4-only by default
+		if vi, vj := first.To4() != nil, second.To4() != nil; vi != vj {
 			return vi
 		}
 
-		// IPv4 is preferred
-		if vi, vj := first.To4() != nil, second.To4() != nil; vi != vj {
+		// ethernet is preferred
+		if vi, vj := strings.HasPrefix(first.Name, "e"), strings.HasPrefix(second.Name, "e"); vi != vj {
 			return vi
 		}
 

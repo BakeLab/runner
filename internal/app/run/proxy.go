@@ -55,7 +55,7 @@ func JobProxyEnv(jobEnvs map[string]string, cacheURL string, serviceNames []stri
 	setPair("https_proxy", "HTTPS_PROXY", cfg.HTTPSProxy)
 
 	// no_proxy is merged rather than replaced: the hosts above are structural, and an
-	// operator cannot list the cache server's startup-assigned address in advance.
+	// operator cannot list the cache server's detected address in advance.
 	noProxy := appendNoProxy(cfg.NoProxy, direct...)
 	for _, name := range []string{"no_proxy", "NO_PROXY"} {
 		if existing, ok := jobEnvs[name]; ok {

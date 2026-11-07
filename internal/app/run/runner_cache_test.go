@@ -155,12 +155,11 @@ func TestRunner_ExternalCacheServer_RegisterRevoke(t *testing.T) {
 	}, &config.Registration{}, cli)
 	t.Cleanup(func() { _ = r.Close() })
 	require.NotNil(t, r.cacheHandler)
-	require.Equal(t, r.cacheHandler.ExternalURL()+"/", r.envs["ACTIONS_CACHE_URL"])
 
 	const publicURL = "http://a1b2c3d4e5f6:8088"
 	token := "external-task-token"
 	repo := "owner/repoX"
-	base := r.envs["ACTIONS_CACHE_URL"] + "_apis/artifactcache"
+	base := r.cacheHandler.ExternalURL() + "/_apis/artifactcache"
 	probe := func() int {
 		resp := cacheRequest(t, token, http.MethodGet, base+"/cache?keys=k&version=v", "", "", "")
 		resp.Body.Close()
@@ -213,7 +212,7 @@ func TestRunner_ExternalCacheServer_RegisterRevoke(t *testing.T) {
 	require.NoError(t, decodeJSON(resp, &hit))
 	require.True(t, strings.HasPrefix(hit.ArchiveLocation, publicURL+"/"), hit.ArchiveLocation)
 
-	unregisterOther, _ := r.registerCacheForTask("external-other-token", artifactcache.JobCredential{Repo: repo, Ref: "refs/heads/other"}, nil)
+	unregisterOther, _ := r.registerCacheForTask("external-other-token", artifactcache.JobCredential{Repo: repo, Ref: "refs/heads/other", PublicURL: publicURL}, nil)
 	defer unregisterOther()
 	resp = cacheRequest(t, "external-other-token", http.MethodGet, base+"/cache?keys=ext-key&version=v", "", "", "")
 	resp.Body.Close()
