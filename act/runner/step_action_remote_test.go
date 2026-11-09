@@ -235,6 +235,7 @@ func TestStepActionRemotePreCleanup(t *testing.T) {
 			}
 			sar.RunContext.ExprEval = sar.RunContext.NewExpressionEvaluator(t.Context())
 			if test.preIf != "false" {
+				expectNodeProbe(cm, "24", 2)
 				_, actionDir := getContainerActionPaths(sar)
 				expectStepFileCommands(t, cm)
 				cm.On("CopyDir", actionDir+"/", sar.actionDir+"/", false, true).Return(noopExecutor)

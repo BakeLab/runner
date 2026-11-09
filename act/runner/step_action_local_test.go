@@ -157,6 +157,7 @@ func TestStepActionPost(t *testing.T) {
 					}
 
 					if test.run {
+						expectNodeProbe(cm, "16", 1)
 						cm.On("Exec", mock.MatchedBy(func(args []string) bool {
 							if len(args) != 3 || args[0] != "node" || args[1] != "--preserve-symlinks-main" {
 								return false

@@ -13,12 +13,24 @@ Gitea Runner runs the jobs of Gitea Actions workflows. Register it with a Gitea 
 In the job image, or on the host for host jobs:
 
 - `bash` or `sh`, or `pwsh` or `powershell` on Windows.
-- `node` for JavaScript actions and `hashFiles()`.
+- `node` for `hashFiles()` and for JavaScript actions in host jobs.
 - `git` 2.34.1 or newer for [`builtin:checkout`](docs/builtin-actions.md).
 - `git-lfs` for `builtin:checkout` with `lfs: true`.
 - `ssh` for `builtin:checkout` with `ssh-key`.
 
 Kubernetes mode needs [a few more tools](docs/kubernetes.md) in job images.
+
+For JavaScript actions in Linux containers, the runner uses `node` from the step's
+`PATH` when its major version matches `runs.using`. Otherwise it downloads a pinned,
+SHA256-verified official runtime from `https://nodejs.org/dist` and copies only the
+Node executable into the job container. The runner needs network access to that
+site; the job container does not. Runtimes are shared by pre, main and post stages
+and composite actions within the job, not between jobs.
+
+Managed runtimes support x64 and ARM64 glibc images, for `node12`, `node16`,
+`node20` and `node24`. Other architectures and musl images must provide a compatible
+Node major in the image. Host jobs continue to use their installed `node`.
+Node 12 and 16 are end-of-life; migrate actions to a maintained runtime.
 
 ### Download pre-built binary
 

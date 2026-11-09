@@ -201,6 +201,7 @@ func TestActionRunner(t *testing.T) {
 			hook := logtest.NewWithLevel(logging.LevelWarn)
 			ctx := common.WithLogger(t.Context(), logging.New(hook))
 			cm := &containerMock{}
+			expectNodeProbe(cm, "16", 3)
 			containerActionDir := "/var/run/act/actions/" + model.UsesHash("/org/repo/path@ref") + "/"
 			cm.On("CopyDir", containerActionDir, "dir/", false, true).Return(func(_ctx context.Context) error { return nil })
 
