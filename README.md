@@ -13,7 +13,8 @@ Gitea Runner runs the jobs of Gitea Actions workflows. Register it with a Gitea 
 In the job image, or on the host for host jobs:
 
 - `bash` or `sh`, or `pwsh` or `powershell` on Windows.
-- `node` for `hashFiles()` and for JavaScript actions in host jobs.
+- `node` for `hashFiles()`, and for JavaScript actions in host jobs without a
+  managed runtime (see below).
 - `git` 2.34.1 or newer for [`builtin:checkout`](docs/builtin-actions.md).
 - `git-lfs` for `builtin:checkout` with `lfs: true`.
 - `ssh` for `builtin:checkout` with `ssh-key`.
@@ -29,7 +30,17 @@ and composite actions within the job, not between jobs.
 
 Managed runtimes support x64 and ARM64 glibc images, for `node12`, `node16`,
 `node20` and `node24`. Other architectures and musl images must provide a compatible
-Node major in the image. Host jobs continue to use their installed `node`.
+Node major in the image.
+
+Host jobs on Linux x64 and ARM64 do the same with the host's `PATH`: when `node` is
+missing or has another major, the runner installs the pinned, SHA256-verified runtime
+into `node/<runs.using>/` under the host `workdir_parent` (`$HOME/.cache/act` by
+default). Each install is staged and atomically renamed into place, so concurrent
+jobs and runners can share it, and later jobs reuse it. If an install fails and a
+`node` of another major is in `PATH`, the runner warns and uses that `node`. Host
+jobs on other platforms, such as macOS, keep using `node` from `PATH`. Managed host
+runtimes need glibc. Delete that directory to remove them.
+
 Node 12 and 16 are end-of-life; migrate actions to a maintained runtime.
 
 ### Download pre-built binary

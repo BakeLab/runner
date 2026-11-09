@@ -14,7 +14,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"gitea.com/gitea/runner/act/container"
@@ -76,12 +79,6 @@ func TestNodeRuntimeSelection(t *testing.T) {
 			assert.Equal(t, want, executable)
 		}
 		cm.AssertNotCalled(t, "ExecOutput", mock.Anything, mock.Anything)
-	})
-	t.Run("host mode is unchanged", func(t *testing.T) {
-		rc := &RunContext{platformImage: "-self-hosted"}
-		executable, err := rc.nodeRuntime(t.Context(), model.ActionRunsUsingNode20, nil)
-		require.NoError(t, err)
-		assert.Equal(t, "node", executable)
 	})
 }
 
@@ -200,4 +197,176 @@ func TestNodeRuntimeProbeUsesStepPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "node", executable)
 	cm.AssertExpectations(t)
+}
+
+func writeFakeNode(t *testing.T, dir, major string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "node"), []byte("#!/bin/sh\necho "+major+"\n"), 0o755))
+}
+
+type hostNodeServer struct {
+	source   hostNodeSource
+	requests atomic.Int32
+}
+
+func newHostNodeServer(t *testing.T, goos, goarch, script string) *hostNodeServer {
+	t.Helper()
+	var archive bytes.Buffer
+	compressed := gzip.NewWriter(&archive)
+	writer := tar.NewWriter(compressed)
+	payload := []byte(script)
+	require.NoError(t, writer.WriteHeader(&tar.Header{Name: "node-v20.0.0-linux-x64/bin/node", Mode: 0o755, Size: int64(len(payload)), Typeflag: tar.TypeReg}))
+	_, err := writer.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	require.NoError(t, compressed.Close())
+	hash := sha256.Sum256(archive.Bytes())
+	s := &hostNodeServer{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.requests.Add(1)
+		assert.Equal(t, "/v20.0.0/node-v20.0.0-linux-x64.tar.gz", r.URL.Path)
+		_, err := w.Write(archive.Bytes())
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	s.source = hostNodeSource{
+		goos: goos, goarch: goarch, client: server.Client(), baseURL: server.URL,
+		releases: map[model.ActionRunsUsing]nodeRelease{
+			model.ActionRunsUsingNode20: {"20.0.0", map[string]string{"x64": hex.EncodeToString(hash[:])}},
+		},
+	}
+	return s
+}
+
+const fakeManagedNode = "#!/bin/sh\necho v20.0.0\n"
+
+func newHostRunContext(cacheDir string) *RunContext {
+	return &RunContext{Config: &Config{ActionCacheDir: cacheDir}, platformImage: "-self-hosted"}
+}
+
+func TestHostNodeRuntime(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("managed host runtimes are Linux only")
+	}
+	managedPath := func(cacheDir string) string {
+		return filepath.Join(cacheDir, "node", "node20", "v20.0.0-linux-x64", "node")
+	}
+	t.Run("matching PATH node is used", func(t *testing.T) {
+		bin := t.TempDir()
+		writeFakeNode(t, bin, "20")
+		server := newHostNodeServer(t, "linux", "amd64", fakeManagedNode)
+		rc := newHostRunContext(t.TempDir())
+		executable, err := rc.hostNodeRuntime(t.Context(), model.ActionRunsUsingNode20, map[string]string{"PATH": bin}, server.source)
+		require.NoError(t, err)
+		assert.Equal(t, "node", executable)
+		assert.Zero(t, server.requests.Load())
+	})
+	for name, major := range map[string]string{"missing": "", "mismatched": "16"} {
+		t.Run(name+" PATH node installs and reuses managed runtime", func(t *testing.T) {
+			bin := t.TempDir()
+			if major != "" {
+				writeFakeNode(t, bin, major)
+			}
+			env := map[string]string{"PATH": bin}
+			cacheDir := t.TempDir()
+			server := newHostNodeServer(t, "linux", "amd64", fakeManagedNode)
+			executable, err := newHostRunContext(cacheDir).hostNodeRuntime(t.Context(), model.ActionRunsUsingNode20, env, server.source)
+			require.NoError(t, err)
+			assert.Equal(t, managedPath(cacheDir), executable)
+			assert.Equal(t, "v20.0.0", hostNodeVersion(t.Context(), executable))
+			entries, err := os.ReadDir(filepath.Dir(filepath.Dir(executable)))
+			require.NoError(t, err)
+			assert.Len(t, entries, 1, "staging directories must not be left behind")
+
+			rc := newHostRunContext(cacheDir)
+			executable, err = rc.hostNodeRuntime(t.Context(), model.ActionRunsUsingNode20, env, server.source)
+			require.NoError(t, err)
+			assert.Equal(t, managedPath(cacheDir), executable)
+			assert.Equal(t, int32(1), server.requests.Load(), "a later job reuses the cached runtime")
+			assert.Equal(t, executable, rc.nodeRuntimes[model.ActionRunsUsingNode20])
+		})
+	}
+	for _, platform := range [][2]string{{"darwin", "arm64"}, {"windows", "amd64"}, {"linux", "riscv64"}, {"linux", "386"}} {
+		t.Run(platform[0]+"/"+platform[1]+" keeps PATH node", func(t *testing.T) {
+			server := newHostNodeServer(t, platform[0], platform[1], fakeManagedNode)
+			executable, err := newHostRunContext(t.TempDir()).hostNodeRuntime(t.Context(), model.ActionRunsUsingNode20, map[string]string{"PATH": t.TempDir()}, server.source)
+			require.NoError(t, err)
+			assert.Equal(t, "node", executable)
+			assert.Zero(t, server.requests.Load())
+		})
+	}
+	t.Run("unpinned runs.using keeps PATH node", func(t *testing.T) {
+		server := newHostNodeServer(t, "linux", "amd64", fakeManagedNode)
+		executable, err := newHostRunContext(t.TempDir()).hostNodeRuntime(t.Context(), model.ActionRunsUsingNode24, map[string]string{"PATH": t.TempDir()}, server.source)
+		require.NoError(t, err)
+		assert.Equal(t, "node", executable)
+		assert.Zero(t, server.requests.Load())
+	})
+	t.Run("failed install falls back to mismatched PATH node", func(t *testing.T) {
+		bin := t.TempDir()
+		writeFakeNode(t, bin, "16")
+		server := newHostNodeServer(t, "linux", "amd64", fakeManagedNode)
+		server.source.releases[model.ActionRunsUsingNode20].hashes["x64"] = strings.Repeat("0", 64)
+		cacheDir := t.TempDir()
+		executable, err := newHostRunContext(cacheDir).hostNodeRuntime(t.Context(), model.ActionRunsUsingNode20, map[string]string{"PATH": bin}, server.source)
+		require.NoError(t, err)
+		assert.Equal(t, "node", executable)
+		entries, err := os.ReadDir(filepath.Join(cacheDir, "node", "node20"))
+		require.NoError(t, err)
+		assert.Empty(t, entries, "an unverified runtime must not be installed")
+	})
+	t.Run("failed install without PATH node is an error", func(t *testing.T) {
+		server := newHostNodeServer(t, "linux", "amd64", "#!/bin/sh\nexit 1\n")
+		_, err := newHostRunContext(t.TempDir()).hostNodeRuntime(t.Context(), model.ActionRunsUsingNode20, map[string]string{"PATH": t.TempDir()}, server.source)
+		require.ErrorContains(t, err, "official binaries require glibc")
+	})
+	t.Run("concurrent installers converge", func(t *testing.T) {
+		server := newHostNodeServer(t, "linux", "amd64", fakeManagedNode)
+		release := server.source.releases[model.ActionRunsUsingNode20]
+		root := filepath.Join(t.TempDir(), "node", "node20")
+		var wg sync.WaitGroup
+		results := make([]string, 8)
+		errs := make([]error, len(results))
+		for i := range results {
+			wg.Go(func() {
+				results[i], errs[i] = ensureHostNodeRuntime(t.Context(), server.source.client, server.source.baseURL, root, release, "x64")
+			})
+		}
+		wg.Wait()
+		for i := range results {
+			require.NoError(t, errs[i])
+			assert.Equal(t, filepath.Join(root, "v20.0.0-linux-x64", "node"), results[i])
+		}
+		entries, err := os.ReadDir(root)
+		require.NoError(t, err)
+		assert.Len(t, entries, 1)
+		assert.Equal(t, "v20.0.0", hostNodeVersion(t.Context(), results[0]))
+	})
+	t.Run("unusable cached runtime is not replaced", func(t *testing.T) {
+		server := newHostNodeServer(t, "linux", "amd64", fakeManagedNode)
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "v20.0.0-linux-x64"), 0o755))
+		_, err := ensureHostNodeRuntime(t.Context(), server.source.client, server.source.baseURL, root, server.source.releases[model.ActionRunsUsingNode20], "x64")
+		require.ErrorContains(t, err, "remove that directory")
+		assert.Zero(t, server.requests.Load())
+	})
+}
+
+func TestHostManagedNodeAction(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("managed host runtimes are Linux only")
+	}
+	dir := t.TempDir()
+	executable := filepath.Join(dir, "node")
+	require.NoError(t, os.WriteFile(executable, []byte("#!/bin/sh\nprintf '%s|%s' \"$*\" \"$PATH\" > \"$OUT\"\n"), 0o755))
+	out := filepath.Join(dir, "out")
+	rc := &RunContext{
+		platformImage: "-self-hosted",
+		JobContainer:  &container.HostEnvironment{Path: dir, StdOut: io.Discard},
+		nodeRuntimes:  map[model.ActionRunsUsing]string{model.ActionRunsUsingNode20: executable},
+	}
+	require.NoError(t, rc.execNodeAction(t.Context(), model.ActionRunsUsingNode20, "/action/main.js", map[string]string{"PATH": "/usr/bin:/bin", "OUT": out}))
+	data, err := os.ReadFile(out)
+	require.NoError(t, err)
+	assert.Equal(t, "--preserve-symlinks-main /action/main.js|"+dir+":/usr/bin:/bin", string(data))
 }
