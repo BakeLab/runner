@@ -15,12 +15,17 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
+	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"gitea.com/gitea/runner/act/common"
 	"gitea.com/gitea/runner/act/container"
+	"gitea.com/gitea/runner/act/lookpath"
 
 	"gitea.dev/actionslib/pkg/model"
 )
@@ -49,6 +54,8 @@ var nodeReleases = map[model.ActionRunsUsing]nodeRelease{
 	}},
 }
 
+const nodeDistURL = "https://nodejs.org/dist"
+
 const nodeProbe = `PATH="$1"; export PATH; if command -v node >/dev/null 2>&1; then node -p 'process.versions.node.split(".")[0]'; else printf missing; fi`
 
 func (rc *RunContext) execNodeAction(ctx context.Context, using model.ActionRunsUsing, script string, env map[string]string) error {
@@ -71,8 +78,13 @@ func (rc *RunContext) execNodeAction(ctx context.Context, using model.ActionRuns
 }
 
 func (rc *RunContext) nodeRuntime(ctx context.Context, using model.ActionRunsUsing, env map[string]string) (string, error) {
-	if rc.IsHostEnv() || common.Dryrun(ctx) {
+	if common.Dryrun(ctx) {
 		return "node", nil
+	}
+	if rc.IsHostEnv() {
+		return rc.hostNodeRuntime(ctx, using, env, hostNodeSource{
+			goos: runtime.GOOS, goarch: runtime.GOARCH, client: http.DefaultClient, baseURL: nodeDistURL, releases: nodeReleases,
+		})
 	}
 	job := rc.topLevelRunContext()
 	if executable := job.nodeRuntimes[using]; executable != "" {
@@ -107,7 +119,7 @@ func (rc *RunContext) nodeRuntime(ctx context.Context, using model.ActionRunsUsi
 	dest := path.Join(rc.JobContainer.GetActPath(), "node", string(using))
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	if err := installNodeRuntime(ctx, rc.JobContainer, http.DefaultClient, "https://nodejs.org/dist", release, arch, dest); err != nil {
+	if err := installNodeRuntime(ctx, rc.JobContainer, http.DefaultClient, nodeDistURL, release, arch, dest); err != nil {
 		return "", err
 	}
 	executable := path.Join(dest, "node")
@@ -204,4 +216,143 @@ func installNodeRuntime(ctx context.Context, job container.ExecutionsEnvironment
 			return err
 		})
 	}
+}
+
+// hostNodeSource describes where host jobs get managed Node.js runtimes.
+type hostNodeSource struct {
+	goos, goarch string
+	client       *http.Client
+	baseURL      string
+	releases     map[model.ActionRunsUsing]nodeRelease
+}
+
+// hostNodeRuntime keeps using node from PATH unless a pinned official build exists
+// for this host and PATH lacks the declared major. Managed runtimes are cached under
+// the action cache dir and shared by jobs and runners on the host.
+func (rc *RunContext) hostNodeRuntime(ctx context.Context, using model.ActionRunsUsing, env map[string]string, source hostNodeSource) (string, error) {
+	arch := map[string]string{"amd64": "x64", "arm64": "arm64"}[source.goarch]
+	release, ok := source.releases[using]
+	if source.goos != "linux" || !ok || release.hashes[arch] == "" {
+		return "node", nil
+	}
+	job := rc.topLevelRunContext()
+	if executable := job.nodeRuntimes[using]; executable != "" {
+		return executable, nil
+	}
+	found, major := hostNodeMajor(ctx, env)
+	if major == strings.TrimPrefix(string(using), "node") {
+		return "node", nil
+	}
+	logger := common.Logger(ctx)
+	if found == "" {
+		logger.Infof("No node in PATH; using managed Node.js %s for %s actions", release.version, using)
+	} else {
+		logger.Infof("%s reports Node.js major %q; using managed Node.js %s for %s actions", found, major, release.version, using)
+	}
+	executable, err := ensureHostNodeRuntime(ctx, source.client, source.baseURL, filepath.Join(rc.ActionCacheDir(), "node", string(using)), release, arch)
+	if err != nil {
+		if found != "" {
+			logger.Warnf("Cannot provision Node.js %s for %s actions, using %s: %v", release.version, using, found, err)
+			return "node", nil
+		}
+		return "", err
+	}
+	if job.nodeRuntimes == nil {
+		job.nodeRuntimes = make(map[model.ActionRunsUsing]string)
+	}
+	job.nodeRuntimes[using] = executable
+	return executable, nil
+}
+
+// hostNodeMajor resolves node from the step PATH like host execution does and
+// reports its major version, or an empty major when it cannot be run.
+func hostNodeMajor(ctx context.Context, env map[string]string) (string, string) {
+	found, err := lookpath.LookPath2("node", env)
+	if err != nil {
+		return "", ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, found, "-p", `process.versions.node.split(".")[0]`)
+	for key, value := range env {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
+	output, err := cmd.Output()
+	if err != nil {
+		common.Logger(ctx).Debugf("probe %s: %v", found, err)
+		return found, ""
+	}
+	return found, strings.TrimSpace(string(output))
+}
+
+func hostNodeVersion(ctx context.Context, executable string) string {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for attempt := 1; ; attempt++ {
+		cmd := exec.CommandContext(ctx, executable, "--version")
+		cmd.Env = []string{}
+		output, err := cmd.Output()
+		// A process forked elsewhere in the runner while the binary was being
+		// written can briefly hold it open for writing (golang/go#22315).
+		if errors.Is(err, syscall.ETXTBSY) && attempt < 20 {
+			select {
+			case <-ctx.Done():
+				return ""
+			case <-time.After(50 * time.Millisecond):
+				continue
+			}
+		}
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(output))
+	}
+}
+
+// ensureHostNodeRuntime installs a verified runtime under root without locks: each
+// installer stages into a private directory and renames it into place, so the
+// versioned directory only ever appears complete and concurrent installers converge
+// on whichever rename wins.
+func ensureHostNodeRuntime(ctx context.Context, client *http.Client, baseURL, root string, release nodeRelease, arch string) (string, error) {
+	want := "v" + release.version
+	dir := filepath.Join(root, want+"-linux-"+arch)
+	executable := filepath.Join(dir, "node")
+	if hostNodeVersion(ctx, executable) == want {
+		return executable, nil
+	}
+	if _, err := os.Lstat(dir); err == nil {
+		// Another installer may have just renamed a complete runtime into place.
+		if hostNodeVersion(ctx, executable) == want {
+			return executable, nil
+		}
+		// Replacing it could break jobs running it, so leave that to the operator.
+		return "", fmt.Errorf("managed Node.js at %s is unusable; remove that directory to reinstall it", dir)
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", err
+	}
+	staging, err := os.MkdirTemp(root, ".install-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(staging)
+	common.Logger(ctx).Infof("Installing Node.js %s into %s", release.version, dir)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	if err := installNodeRuntime(ctx, &container.HostEnvironment{}, client, baseURL, release, arch, staging); err != nil {
+		return "", err
+	}
+	if version := hostNodeVersion(ctx, filepath.Join(staging, "node")); version != want {
+		return "", fmt.Errorf("managed Node.js returned version %q, expected %s (official binaries require glibc)", version, want)
+	}
+	if err := os.Chmod(staging, 0o755); err != nil {
+		return "", err
+	}
+	if err := os.Rename(staging, dir); err != nil {
+		if hostNodeVersion(ctx, executable) == want {
+			return executable, nil
+		}
+		return "", fmt.Errorf("install Node.js runtime: %w", err)
+	}
+	return executable, nil
 }
