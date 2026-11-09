@@ -198,12 +198,7 @@ func runActionImpl(step actionStep, actionDir string, remoteAction *remoteAction
 			if err := maybeCopyToActionDir(ctx, step, actionDir, actionPath, containerActionDir); err != nil {
 				return err
 			}
-			containerArgs := nodeActionCommand(container.JoinPath(containerActionDir, action.Runs.Main))
-			logger.Debugf("executing remote job container: %s", containerArgs)
-
-			rc.ApplyExtraPath(ctx, step.getEnv())
-
-			return rc.JobContainer.Exec(containerArgs, *step.getEnv(), "", "")(ctx)
+			return rc.execNodeAction(ctx, x, container.JoinPath(containerActionDir, action.Runs.Main), *step.getEnv())
 		case x.IsDocker():
 			location := path.Join(actionDir, actionPath)
 			if remoteAction == nil {
@@ -650,12 +645,7 @@ func runPreStep(step actionStep) common.Executor {
 				return err
 			}
 
-			containerArgs := nodeActionCommand(container.JoinPath(containerActionDir, action.Runs.Pre))
-			logger.Debugf("executing remote job container: %s", containerArgs)
-
-			rc.ApplyExtraPath(ctx, step.getEnv())
-
-			return rc.JobContainer.Exec(containerArgs, *step.getEnv(), "", "")(ctx)
+			return rc.execNodeAction(ctx, x, container.JoinPath(containerActionDir, action.Runs.Pre), *step.getEnv())
 
 		case x.IsDocker():
 			return execDockerActionStage(ctx, step, stepStagePre)
@@ -750,12 +740,7 @@ func runPostStep(step actionStep) common.Executor {
 
 			populateEnvsFromSavedState(step.getEnv(), step, rc)
 
-			containerArgs := nodeActionCommand(container.JoinPath(containerActionDir, action.Runs.Post))
-			logger.Debugf("executing remote job container: %s", containerArgs)
-
-			rc.ApplyExtraPath(ctx, step.getEnv())
-
-			return rc.JobContainer.Exec(containerArgs, *step.getEnv(), "", "")(ctx)
+			return rc.execNodeAction(ctx, x, container.JoinPath(containerActionDir, action.Runs.Post), *step.getEnv())
 
 		case x.IsDocker():
 			populateEnvsFromSavedState(step.getEnv(), step, rc)

@@ -90,6 +90,7 @@ type RunContext struct {
 	jobEnv             map[string]string          // workflow and job env as evaluated for the container and service specs
 	dockerActionImages map[*model.Step]string     // Dockerfile action images built for this job, removed when it ends
 	actionDownloads    map[string]*actionDownload // remote action repositories by clone URL and ref, fetched once per job
+	nodeRuntimes       map[model.ActionRunsUsing]string
 
 	// summaryFileInitialized tracks which per-step summary files (workflow/step-summary-N.md)
 	// have already been created on the JobContainer. The runner sets up file-command files
