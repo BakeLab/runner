@@ -198,6 +198,8 @@ func runActionImpl(step actionStep, actionDir string, remoteAction *remoteAction
 			if err := maybeCopyToActionDir(ctx, step, actionDir, actionPath, containerActionDir); err != nil {
 				return err
 			}
+			rc.ApplyExtraPath(ctx, step.getEnv())
+			rc.prepareSetupPython(ctx, remoteAction, *step.getEnv())
 			return rc.execNodeAction(ctx, x, container.JoinPath(containerActionDir, action.Runs.Main), *step.getEnv())
 		case x.IsDocker():
 			location := path.Join(actionDir, actionPath)
