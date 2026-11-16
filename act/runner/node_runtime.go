@@ -37,20 +37,27 @@ type nodeRelease struct {
 
 var nodeReleases = map[model.ActionRunsUsing]nodeRelease{
 	model.ActionRunsUsingNode12: {"12.22.12", map[string]string{
-		"x64":   "ff92a45c4d03e8e270bec1ab337b8fff6e9de293dabfe7e8936a41f2fb0b202e",
-		"arm64": "91aefa690914b7f24250f3c0b560b42c6d306315d40009c96b5a6940115895fe",
+		"darwin-x64":  "32927913ed549ce01685a6f9f4697567a64592c7fd1e9a845ac8a10efa1475e6",
+		"linux-x64":   "ff92a45c4d03e8e270bec1ab337b8fff6e9de293dabfe7e8936a41f2fb0b202e",
+		"linux-arm64": "91aefa690914b7f24250f3c0b560b42c6d306315d40009c96b5a6940115895fe",
 	}},
 	model.ActionRunsUsingNode16: {"16.20.2", map[string]string{
-		"x64":   "c9193e6c414891694759febe846f4f023bf48410a6924a8b1520c46565859665",
-		"arm64": "b6945fcc9ad220386bb814bfae7137189fd17297f2959a744105e1bee006035a",
+		"darwin-arm64": "6a5c4108475871362d742b988566f3fe307f6a67ce14634eb3fbceb4f9eea88c",
+		"darwin-x64":   "d7a46eaf2b57ffddeda16ece0d887feb2e31a91ad33f8774da553da0249dc4a6",
+		"linux-x64":    "c9193e6c414891694759febe846f4f023bf48410a6924a8b1520c46565859665",
+		"linux-arm64":  "b6945fcc9ad220386bb814bfae7137189fd17297f2959a744105e1bee006035a",
 	}},
 	model.ActionRunsUsingNode20: {"20.20.2", map[string]string{
-		"x64":   "19e56f0825510207dd904f087fe52faa0a4eb6b2aab5f0ea7a33830d04888b8b",
-		"arm64": "47ef73d543ecf6eb19435f6c03a0ac4809b3bf0dd6b26c7c571efc2a6572a74d",
+		"darwin-arm64": "466e05f3477c20dfb723054dfebffe55bc74660ee77f612166fca121dacb65b6",
+		"darwin-x64":   "8be6f5e4bb128c82774f8a0b8d7a1cc1365a7977d9657cece0ca647b3fe04e61",
+		"linux-x64":    "19e56f0825510207dd904f087fe52faa0a4eb6b2aab5f0ea7a33830d04888b8b",
+		"linux-arm64":  "47ef73d543ecf6eb19435f6c03a0ac4809b3bf0dd6b26c7c571efc2a6572a74d",
 	}},
 	model.ActionRunsUsingNode24: {"24.22.2", map[string]string{
-		"x64":   "361718c444e49af2ca5a110c83ba6a8901143f23ab285ebbef0341f391f482a9",
-		"arm64": "95c264150aceb7f3437a29fd6984924f5f8d1511ea3cbd6c508b83f6c555dae2",
+		"darwin-arm64": "aa9549349e47dffaa42dcf95d6e06ade8c4bdafc980979883b88767670df385a",
+		"darwin-x64":   "d5e336d588c45be0c37dbd52cc29895593009ca4997a77a1fd02815131ed0e52",
+		"linux-x64":    "361718c444e49af2ca5a110c83ba6a8901143f23ab285ebbef0341f391f482a9",
+		"linux-arm64":  "95c264150aceb7f3437a29fd6984924f5f8d1511ea3cbd6c508b83f6c555dae2",
 	}},
 }
 
@@ -111,21 +118,22 @@ func (rc *RunContext) nodeRuntime(ctx context.Context, using model.ActionRunsUsi
 	case "aarch64":
 		arch = "arm64"
 	}
+	platform := "linux-" + arch
 	release, ok := nodeReleases[using]
-	if !ok || release.hashes[arch] == "" {
+	if !ok || release.hashes[platform] == "" {
 		return "", fmt.Errorf("no managed %s runtime for Linux %s; install the declared Node.js major in the job image", using, arch)
 	}
 	common.Logger(ctx).Infof("Installing Node.js %s for %s actions", release.version, using)
 	dest := path.Join(rc.JobContainer.GetActPath(), "node", string(using))
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	if err := installNodeRuntime(ctx, rc.JobContainer, http.DefaultClient, nodeDistURL, release, arch, dest); err != nil {
+	if err := installNodeRuntime(ctx, rc.JobContainer, http.DefaultClient, nodeDistURL, release, platform, dest); err != nil {
 		return "", err
 	}
 	executable := path.Join(dest, "node")
 	version, err := nodeOutput(ctx, rc.JobContainer, []string{executable, "--version"})
 	if err != nil {
-		return "", fmt.Errorf("managed Node.js cannot run in the job image (official binaries require glibc); install a compatible %s runtime: %w", using, err)
+		return "", fmt.Errorf("managed Node.js cannot run in the job image (Linux official binaries require glibc); install a compatible %s runtime: %w", using, err)
 	}
 	if version != "v"+release.version {
 		return "", fmt.Errorf("managed Node.js returned version %q, expected v%s", version, release.version)
@@ -153,8 +161,8 @@ func nodeOutput(ctx context.Context, job container.ExecutionsEnvironment, args [
 	return strings.TrimSpace(string(data)), nil
 }
 
-func installNodeRuntime(ctx context.Context, job container.ExecutionsEnvironment, client *http.Client, baseURL string, release nodeRelease, arch, dest string) error {
-	name := "node-v" + release.version + "-linux-" + arch
+func installNodeRuntime(ctx context.Context, job container.ExecutionsEnvironment, client *http.Client, baseURL string, release nodeRelease, platform, dest string) error {
+	name := "node-v" + release.version + "-" + platform
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v"+release.version+"/"+name+".tar.gz", nil)
 	if err != nil {
 		return err
@@ -182,7 +190,7 @@ func installNodeRuntime(ctx context.Context, job container.ExecutionsEnvironment
 	if size > maxArchive {
 		return errors.New("node archive exceeds 100 MiB")
 	}
-	if hex.EncodeToString(hash.Sum(nil)) != release.hashes[arch] {
+	if hex.EncodeToString(hash.Sum(nil)) != release.hashes[platform] {
 		return errors.New("node archive SHA256 mismatch")
 	}
 	if _, err := archive.Seek(0, io.SeekStart); err != nil {
@@ -231,8 +239,9 @@ type hostNodeSource struct {
 // the action cache dir and shared by jobs and runners on the host.
 func (rc *RunContext) hostNodeRuntime(ctx context.Context, using model.ActionRunsUsing, env map[string]string, source hostNodeSource) (string, error) {
 	arch := map[string]string{"amd64": "x64", "arm64": "arm64"}[source.goarch]
+	platform := source.goos + "-" + arch
 	release, ok := source.releases[using]
-	if source.goos != "linux" || !ok || release.hashes[arch] == "" {
+	if (source.goos != "linux" && source.goos != "darwin") || arch == "" || !ok || release.hashes[platform] == "" {
 		return "node", nil
 	}
 	job := rc.topLevelRunContext()
@@ -249,7 +258,7 @@ func (rc *RunContext) hostNodeRuntime(ctx context.Context, using model.ActionRun
 	} else {
 		logger.Infof("%s reports Node.js major %q; using managed Node.js %s for %s actions", found, major, release.version, using)
 	}
-	executable, err := ensureHostNodeRuntime(ctx, source.client, source.baseURL, filepath.Join(rc.ActionCacheDir(), "node", string(using)), release, arch)
+	executable, err := ensureHostNodeRuntime(ctx, source.client, source.baseURL, filepath.Join(rc.ActionCacheDir(), "node", string(using)), release, platform)
 	if err != nil {
 		if found != "" {
 			logger.Warnf("Cannot provision Node.js %s for %s actions, using %s: %v", release.version, using, found, err)
@@ -313,9 +322,9 @@ func hostNodeVersion(ctx context.Context, executable string) string {
 // installer stages into a private directory and renames it into place, so the
 // versioned directory only ever appears complete and concurrent installers converge
 // on whichever rename wins.
-func ensureHostNodeRuntime(ctx context.Context, client *http.Client, baseURL, root string, release nodeRelease, arch string) (string, error) {
+func ensureHostNodeRuntime(ctx context.Context, client *http.Client, baseURL, root string, release nodeRelease, platform string) (string, error) {
 	want := "v" + release.version
-	dir := filepath.Join(root, want+"-linux-"+arch)
+	dir := filepath.Join(root, want+"-"+platform)
 	executable := filepath.Join(dir, "node")
 	if hostNodeVersion(ctx, executable) == want {
 		return executable, nil
@@ -339,11 +348,11 @@ func ensureHostNodeRuntime(ctx context.Context, client *http.Client, baseURL, ro
 	common.Logger(ctx).Infof("Installing Node.js %s into %s", release.version, dir)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	if err := installNodeRuntime(ctx, &container.HostEnvironment{}, client, baseURL, release, arch, staging); err != nil {
+	if err := installNodeRuntime(ctx, &container.HostEnvironment{}, client, baseURL, release, platform, staging); err != nil {
 		return "", err
 	}
 	if version := hostNodeVersion(ctx, filepath.Join(staging, "node")); version != want {
-		return "", fmt.Errorf("managed Node.js returned version %q, expected %s (official binaries require glibc)", version, want)
+		return "", fmt.Errorf("managed Node.js returned version %q, expected %s (Linux official binaries require glibc)", version, want)
 	}
 	if err := os.Chmod(staging, 0o755); err != nil {
 		return "", err

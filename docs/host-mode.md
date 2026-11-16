@@ -16,3 +16,7 @@ steps:
 - The override does not preserve workspace or temporary files. Store persistent helper files outside those directories and arrange the helper's eventual shutdown.
 
 This follows [actions/runner's tracking ID and orphan cleanup](https://github.com/actions/runner/blob/main/src/Runner.Worker/JobExtension.cs). Container jobs follow their container's lifecycle.
+
+## Node.js actions
+
+Linux and macOS host jobs reuse a matching Node.js on `PATH`, or install the declared action runtime from SHA256-pinned official archives. Managed binaries are cached by version, operating system and architecture. Unsupported runtime/platform combinations still require Node.js on `PATH`.
