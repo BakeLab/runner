@@ -158,9 +158,9 @@ func TestInstallNodeRuntime(t *testing.T) {
 			require.NoError(t, writer.Close())
 			require.NoError(t, compressed.Close())
 			hash := sha256.Sum256(archive.Bytes())
-			release := nodeRelease{version: "20.0.0", hashes: map[string]string{"x64": hex.EncodeToString(hash[:])}}
+			release := nodeRelease{version: "20.0.0", hashes: map[string]string{"linux-x64": hex.EncodeToString(hash[:])}}
 			if test.badHash {
-				release.hashes["x64"] = strings.Repeat("0", 64)
+				release.hashes["linux-x64"] = strings.Repeat("0", 64)
 			}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				assert.Equal(t, "/v20.0.0/node-v20.0.0-linux-x64.tar.gz", r.URL.Path)
@@ -173,7 +173,7 @@ func TestInstallNodeRuntime(t *testing.T) {
 			}))
 			defer server.Close()
 			dest := t.TempDir()
-			err := installNodeRuntime(t.Context(), &container.HostEnvironment{}, server.Client(), server.URL, release, "x64", dest)
+			err := installNodeRuntime(t.Context(), &container.HostEnvironment{}, server.Client(), server.URL, release, "linux-x64", dest)
 			if test.wantErr != "" {
 				require.ErrorContains(t, err, test.wantErr)
 				_, statErr := os.Stat(filepath.Join(dest, "node"))
@@ -211,11 +211,12 @@ type hostNodeServer struct {
 
 func newHostNodeServer(t *testing.T, goos, goarch, script string) *hostNodeServer {
 	t.Helper()
+	platform := goos + "-" + map[string]string{"amd64": "x64", "arm64": "arm64"}[goarch]
 	var archive bytes.Buffer
 	compressed := gzip.NewWriter(&archive)
 	writer := tar.NewWriter(compressed)
 	payload := []byte(script)
-	require.NoError(t, writer.WriteHeader(&tar.Header{Name: "node-v20.0.0-linux-x64/bin/node", Mode: 0o755, Size: int64(len(payload)), Typeflag: tar.TypeReg}))
+	require.NoError(t, writer.WriteHeader(&tar.Header{Name: "node-v20.0.0-" + platform + "/bin/node", Mode: 0o755, Size: int64(len(payload)), Typeflag: tar.TypeReg}))
 	_, err := writer.Write(payload)
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
@@ -224,7 +225,7 @@ func newHostNodeServer(t *testing.T, goos, goarch, script string) *hostNodeServe
 	s := &hostNodeServer{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.requests.Add(1)
-		assert.Equal(t, "/v20.0.0/node-v20.0.0-linux-x64.tar.gz", r.URL.Path)
+		assert.Equal(t, "/v20.0.0/node-v20.0.0-"+platform+".tar.gz", r.URL.Path)
 		_, err := w.Write(archive.Bytes())
 		assert.NoError(t, err)
 	}))
@@ -232,7 +233,7 @@ func newHostNodeServer(t *testing.T, goos, goarch, script string) *hostNodeServe
 	s.source = hostNodeSource{
 		goos: goos, goarch: goarch, client: server.Client(), baseURL: server.URL,
 		releases: map[model.ActionRunsUsing]nodeRelease{
-			model.ActionRunsUsingNode20: {"20.0.0", map[string]string{"x64": hex.EncodeToString(hash[:])}},
+			model.ActionRunsUsingNode20: {"20.0.0", map[string]string{platform: hex.EncodeToString(hash[:])}},
 		},
 	}
 	return s
@@ -246,7 +247,7 @@ func newHostRunContext(cacheDir string) *RunContext {
 
 func TestHostNodeRuntime(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("managed host runtimes are Linux only")
+		t.Skip("managed host runtimes use Unix executables")
 	}
 	managedPath := func(cacheDir string) string {
 		return filepath.Join(cacheDir, "node", "node20", "v20.0.0-linux-x64", "node")
@@ -286,7 +287,22 @@ func TestHostNodeRuntime(t *testing.T) {
 			assert.Equal(t, executable, rc.nodeRuntimes[model.ActionRunsUsingNode20])
 		})
 	}
-	for _, platform := range [][2]string{{"darwin", "arm64"}, {"windows", "amd64"}, {"linux", "riscv64"}, {"linux", "386"}} {
+	for _, arch := range []string{"arm64", "amd64"} {
+		t.Run("darwin/"+arch+" installs and reuses runtime without PATH node", func(t *testing.T) {
+			server := newHostNodeServer(t, "darwin", arch, fakeManagedNode)
+			cache := t.TempDir()
+			env := map[string]string{"PATH": t.TempDir()}
+			executable, err := newHostRunContext(cache).hostNodeRuntime(t.Context(), model.ActionRunsUsingNode20, env, server.source)
+			require.NoError(t, err)
+			platform := "darwin-" + map[string]string{"amd64": "x64", "arm64": "arm64"}[arch]
+			assert.Equal(t, filepath.Join(cache, "node", "node20", "v20.0.0-"+platform, "node"), executable)
+			reused, err := newHostRunContext(cache).hostNodeRuntime(t.Context(), model.ActionRunsUsingNode20, env, server.source)
+			require.NoError(t, err)
+			assert.Equal(t, executable, reused)
+			assert.Equal(t, int32(1), server.requests.Load())
+		})
+	}
+	for _, platform := range [][2]string{{"windows", "amd64"}, {"linux", "riscv64"}, {"linux", "386"}} {
 		t.Run(platform[0]+"/"+platform[1]+" keeps PATH node", func(t *testing.T) {
 			server := newHostNodeServer(t, platform[0], platform[1], fakeManagedNode)
 			executable, err := newHostRunContext(t.TempDir()).hostNodeRuntime(t.Context(), model.ActionRunsUsingNode20, map[string]string{"PATH": t.TempDir()}, server.source)
@@ -306,7 +322,7 @@ func TestHostNodeRuntime(t *testing.T) {
 		bin := t.TempDir()
 		writeFakeNode(t, bin, "16")
 		server := newHostNodeServer(t, "linux", "amd64", fakeManagedNode)
-		server.source.releases[model.ActionRunsUsingNode20].hashes["x64"] = strings.Repeat("0", 64)
+		server.source.releases[model.ActionRunsUsingNode20].hashes["linux-x64"] = strings.Repeat("0", 64)
 		cacheDir := t.TempDir()
 		executable, err := newHostRunContext(cacheDir).hostNodeRuntime(t.Context(), model.ActionRunsUsingNode20, map[string]string{"PATH": bin}, server.source)
 		require.NoError(t, err)
@@ -318,7 +334,7 @@ func TestHostNodeRuntime(t *testing.T) {
 	t.Run("failed install without PATH node is an error", func(t *testing.T) {
 		server := newHostNodeServer(t, "linux", "amd64", "#!/bin/sh\nexit 1\n")
 		_, err := newHostRunContext(t.TempDir()).hostNodeRuntime(t.Context(), model.ActionRunsUsingNode20, map[string]string{"PATH": t.TempDir()}, server.source)
-		require.ErrorContains(t, err, "official binaries require glibc")
+		require.ErrorContains(t, err, "Linux official binaries require glibc")
 	})
 	t.Run("concurrent installers converge", func(t *testing.T) {
 		server := newHostNodeServer(t, "linux", "amd64", fakeManagedNode)
@@ -329,7 +345,7 @@ func TestHostNodeRuntime(t *testing.T) {
 		errs := make([]error, len(results))
 		for i := range results {
 			wg.Go(func() {
-				results[i], errs[i] = ensureHostNodeRuntime(t.Context(), server.source.client, server.source.baseURL, root, release, "x64")
+				results[i], errs[i] = ensureHostNodeRuntime(t.Context(), server.source.client, server.source.baseURL, root, release, "linux-x64")
 			})
 		}
 		wg.Wait()
@@ -346,7 +362,7 @@ func TestHostNodeRuntime(t *testing.T) {
 		server := newHostNodeServer(t, "linux", "amd64", fakeManagedNode)
 		root := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(root, "v20.0.0-linux-x64"), 0o755))
-		_, err := ensureHostNodeRuntime(t.Context(), server.source.client, server.source.baseURL, root, server.source.releases[model.ActionRunsUsingNode20], "x64")
+		_, err := ensureHostNodeRuntime(t.Context(), server.source.client, server.source.baseURL, root, server.source.releases[model.ActionRunsUsingNode20], "linux-x64")
 		require.ErrorContains(t, err, "remove that directory")
 		assert.Zero(t, server.requests.Load())
 	})
@@ -354,7 +370,7 @@ func TestHostNodeRuntime(t *testing.T) {
 
 func TestHostManagedNodeAction(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("managed host runtimes are Linux only")
+		t.Skip("managed host runtimes use Unix executables")
 	}
 	dir := t.TempDir()
 	executable := filepath.Join(dir, "node")
